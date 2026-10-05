@@ -1,6 +1,0 @@
-# never publish personal data or secrets
-*.xlsx
-api_key.txt
-backups/
-site/
-__pycache__/
