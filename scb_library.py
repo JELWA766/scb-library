@@ -140,6 +140,28 @@ MARKS = ["Watched", "Unwatched", "Watch Later", "Skipped"]
 CH_HDR = 5   # Channels header row; channel i is on row CH_HDR + i
 
 
+HM_FMT = '[h]" h "mm" m"'
+HM_Z = '[h]" h "mm" m";;"·"'
+
+
+def hm(expr):
+    """Excel text expression: a duration (in days) shown as '2 h 15 m'."""
+    r = f"ROUND(({expr})*1440,0)"
+    return f'IF({r}<60,{r}&" m",IF(MOD({r},60)=0,INT({r}/60)&" h",INT({r}/60)&" h "&MOD({r},60)&" m"))'
+
+
+def tidy(ch, legend=True, left=0.07, width=0.90):
+    """Give a chart explicit room for title, axis labels and legend so they never overlap."""
+    from openpyxl.chart.layout import Layout, ManualLayout
+    if ch.title is not None:
+        ch.title.overlay = False
+    ch.plot_area.layout = Layout(manualLayout=ManualLayout(
+        layoutTarget="inner", xMode="edge", yMode="edge", x=left, y=0.17, w=width, h=0.48 if legend else 0.63))
+    if legend and ch.legend is not None:
+        ch.legend.position = "b"; ch.legend.overlay = False
+        ch.legend.layout = Layout(manualLayout=ManualLayout(xMode="edge", yMode="edge", x=0.03, y=0.87, w=0.94, h=0.11))
+
+
 def V(col):
     return f"tblVideos[{col}]"
 
@@ -431,6 +453,8 @@ def merge(existing, fetched, fetched_channels, now):
 
 # ----------------------------------------------------------------------------- finalize
 def finalize(videos, channels, tz):
+    # 0:00 entries are live-stream / premiere placeholders that never became real videos
+    videos[:] = [v for v in videos if (v.get("seconds") or 0) > 0]
     name_by_id = {c["id"]: c["name"] for c in channels}
     yt_to_id = {c.get("yt"): c["id"] for c in channels if c.get("yt")}
     for v in videos:
@@ -457,7 +481,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     colors = [PALETTE[i % len(PALETTE)] for i in range(n)]
     cidx = {c["id"]: i for i, c in enumerate(channels)}
 
-    names = ["Dashboard", "Library", "Queue", "Calendar", "History", "Stats", "Channels", "Settings", "Lists"]
+    names = ["Dashboard", "Library", "Queue", "Calendar", "History", "Stats", "Channels"] + \
+            (["Carry Over"] if fan else []) + ["Settings", "Lists"]
     ws_d = wb.active; ws_d.title = "Dashboard"
     W = {nm: (ws_d if nm == "Dashboard" else wb.create_sheet(nm)) for nm in names}
     tabs = dict(Dashboard=NAVY, Library=TEAL, Queue=TEAL, Calendar="2E9E6B", History="2E9E6B", Stats="2E9E6B",
@@ -653,7 +678,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         ("", False),
         *([("About this copy", True),
            ("This is a snapshot taken from the fan website. It does not update itself - download a fresh copy from the site for newer videos (your marks would not carry over).", False),
-           ("Your marks live in the gold columns of the Library sheet and in 'Watched Through' on the Channels sheet. Keep a backup copy of the file.", False)] if fan else
+           ("Your marks live in the gold columns of the Library sheet and in 'Watched Through' on the Channels sheet. Keep a backup copy of the file.", False),
+           ("Got a newer download? Use the 'Carry Over' sheet in the NEW file to bring your marks across from the old one (steps are on that sheet).", False)] if fan else
           [("Updating from YouTube", True),
            ("1. Close this workbook in Excel.   2. Double-click 'Update Library.bat' (or run: python scb_library.py).   3. Re-open the workbook.", False),
            ("Every update backs up the previous workbook to the 'backups' folder, then re-pulls all channels, adds new videos, refreshes views/likes, and keeps your marks.", False),
@@ -716,7 +742,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     section(ws, row, "Year view", "B", "O")
     f(ws, f"B{row}", '="Year view  -  "&$K$4', font=fnt(11, True, "FFFFFF"), fl=NAVY, al=LEFT)
     yh = row + 1
-    head(ws, yh, 2, ["Month"] + [None] * n + ["Total", "Hours"], height=46)
+    head(ws, yh, 2, ["Month"] + [None] * n + ["Total", "Time"], height=46)
     for i in range(n):
         f(ws, f"{CL(3 + i)}{yh}", f"=Channels!$C${CH_HDR + 1 + i}", font=fnt(9, True, "FFFFFF"), fl=colors[i], al=CENTER, border=BOX)
     for m in range(1, 13):
@@ -728,33 +754,33 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
               fmt='#,##0;-#,##0;"·"', al=CENTER, border=BOX)
         f(ws, f"{CL(3 + n)}{r}", f"=SUM(C{r}:{CL(2 + n)}{r})", fmt='#,##0;-#,##0;"·"', font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
         f(ws, f"{CL(4 + n)}{r}",
-          f'=SUMIFS({V("Length")},{V("Day")},">="&DATE($K$4,{m},1),{V("Day")},"<"&DATE($K$4,{m + 1},1))*24',
-          fmt='0.0;-0.0;"·"', al=CENTER, border=BOX)
+          f'=SUMIFS({V("Length")},{V("Day")},">="&DATE($K$4,{m},1),{V("Day")},"<"&DATE($K$4,{m + 1},1))',
+          fmt=HM_Z, al=CENTER, border=BOX)
     r = yh + 13
     put(ws, f"B{r}", "Year total", font=fnt(10, True), border=BOX, fl="EEF0F5")
     for ci in range(3, 5 + n):
         c = CL(ci)
-        f(ws, f"{c}{r}", f"=SUM({c}{yh + 1}:{c}{yh + 12})", fmt="#,##0.#" if ci == 4 + n else "#,##0", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
+        f(ws, f"{c}{r}", f"=SUM({c}{yh + 1}:{c}{yh + 12})", fmt=HM_FMT if ci == 4 + n else "#,##0", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
 
-    def stacked(ws, hdr_row, first_row, last_row, col1, col2, cat_col, anchor, title, w=26, h=8.5, cols=None, ytitle=None):
+    def stacked(ws, hdr_row, first_row, last_row, col1, col2, cat_col, anchor, title, w=26, h=9.5, cols=None, ytitle=None):
         ch = BarChart(); ch.type = "col"; ch.grouping = "stacked"; ch.overlap = 100; ch.gapWidth = 40
         ch.title = title; ch.width, ch.height = w, h
         ch.add_data(Reference(ws, min_col=col1, max_col=col2, min_row=hdr_row, max_row=last_row), titles_from_data=True)
         ch.set_categories(Reference(ws, min_col=cat_col, min_row=first_row, max_row=last_row))
         for s_, c in zip(ch.series, cols or colors):
             s_.graphicalProperties.solidFill = c; s_.graphicalProperties.line.solidFill = c
-        ch.legend.position = "b"
         ch.x_axis.delete = False; ch.y_axis.delete = False
         if ytitle: ch.y_axis.title = ytitle
+        tidy(ch)
         ws.add_chart(ch, anchor)
 
     stacked(ws, yh, yh + 1, yh + 12, 3, 2 + n, 2, f"B{yh + 15}", "Uploads by month (selected year)")
-    row = yh + 15 + 18
+    row = yh + 15 + 20
 
     # ---- Per year
     section(ws, row, "Uploads per year", "B", "O")
     ph = row + 1
-    head(ws, ph, 2, ["Year"] + [None] * n + ["Total", "Hours uploaded", "Watched (dated)", "Hours watched (dated)"], height=46)
+    head(ws, ph, 2, ["Year"] + [None] * n + ["Total", "Time uploaded", "Watched (dated)", "Time watched (dated)"], height=46)
     for i in range(n):
         f(ws, f"{CL(3 + i)}{ph}", f"=Channels!$C${CH_HDR + 1 + i}", font=fnt(9, True, "FFFFFF"), fl=colors[i], al=CENTER, border=BOX)
     py0 = ph + 1
@@ -767,13 +793,13 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
               fmt='#,##0;-#,##0;"·"', al=CENTER, border=BOX)
         tc = CL(3 + n)
         f(ws, f"{tc}{r}", f"=SUM(C{r}:{CL(2 + n)}{r})", fmt="#,##0", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
-        f(ws, f"{CL(4 + n)}{r}", f'=SUMIFS({V("Length")},{V("Day")},{lo},{V("Day")},{hi})*24', fmt="#,##0.0", al=CENTER, border=BOX)
+        f(ws, f"{CL(4 + n)}{r}", f'=SUMIFS({V("Length")},{V("Day")},{lo},{V("Day")},{hi})', fmt=HM_Z, al=CENTER, border=BOX)
         f(ws, f"{CL(5 + n)}{r}", f'=COUNTIFS({V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")', fmt='#,##0;-#,##0;"·"', al=CENTER, border=BOX)
-        f(ws, f"{CL(6 + n)}{r}", f'=SUMIFS({V("Length")},{V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")*24', fmt='#,##0.0;-0.0;"·"', al=CENTER, border=BOX)
+        f(ws, f"{CL(6 + n)}{r}", f'=SUMIFS({V("Length")},{V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")', fmt=HM_Z, al=CENTER, border=BOX)
     py1 = py0 + len(years) - 1
     H_ROWS.update(py0=py0, py1=py1, total_col=CL(3 + n), hours_col=CL(4 + n))
     stacked(ws, ph, py0, py1, 3, 2 + n, 2, f"B{py1 + 2}", "Videos uploaded per year")
-    row = py1 + 2 + 18
+    row = py1 + 2 + 20
 
     # ---- Monthly timeline
     section(ws, row, "Month-by-month timeline", "B", "O")
@@ -783,9 +809,9 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         while (y, m) <= (latest.year, latest.month):
             months.append(date(y, m, 1)); m += 1
             if m == 13: y, m = y + 1, 1
-    mh = row + 1 + 37       # leave space for charts above the table
+    mh = row + 1 + 42       # leave space for charts above the table
     stacked_row_anchor = row + 1
-    head(ws, mh, 2, ["Month"] + [None] * n + ["Total", "Hours uploaded", "Watched (dated)", "Hours watched (dated)", "Activity"], height=46)
+    head(ws, mh, 2, ["Month"] + [None] * n + ["Total", "Time uploaded", "Watched (dated)", "Time watched (dated)", "Activity"], height=46)
     for i in range(n):
         f(ws, f"{CL(3 + i)}{mh}", f"=Channels!$C${CH_HDR + 1 + i}", font=fnt(9, True, "FFFFFF"), fl=colors[i], al=CENTER, border=BOX)
     m0 = mh + 1
@@ -798,9 +824,9 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
             f(ws, f"{CL(3 + i)}{r}", f'=COUNTIFS({V("Day")},{lo},{V("Day")},{hi},{V("Channel ID")},Channels!$E${CH_HDR + 1 + i})',
               fmt='#,##0;-#,##0;"·"', al=CENTER, border=BOX)
         f(ws, f"{tc}{r}", f"=SUM(C{r}:{CL(2 + n)}{r})", fmt='#,##0;-#,##0;"·"', font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
-        f(ws, f"{CL(4 + n)}{r}", f'=SUMIFS({V("Length")},{V("Day")},{lo},{V("Day")},{hi})*24', fmt='0.0;-0.0;"·"', al=CENTER, border=BOX)
+        f(ws, f"{CL(4 + n)}{r}", f'=SUMIFS({V("Length")},{V("Day")},{lo},{V("Day")},{hi})', fmt=HM_Z, al=CENTER, border=BOX)
         f(ws, f"{CL(5 + n)}{r}", f'=COUNTIFS({V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")', fmt='#,##0;-#,##0;"·"', al=CENTER, border=BOX)
-        f(ws, f"{CL(6 + n)}{r}", f'=SUMIFS({V("Length")},{V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")*24', fmt='0.0;-0.0;"·"', al=CENTER, border=BOX)
+        f(ws, f"{CL(6 + n)}{r}", f'=SUMIFS({V("Length")},{V("Watched On")},{lo},{V("Watched On")},{hi},{V("Status")},"Watched")', fmt=HM_Z, al=CENTER, border=BOX)
         f(ws, f"{CL(7 + n)}{r}", f'=IF({tc}{r}=0,"Gap",IF({tc}{r}>AVERAGE(${tc}${m0}:${tc}${m0 + len(months) - 1})+2*STDEV(${tc}${m0}:${tc}${m0 + len(months) - 1}),"High",""))',
           al=CENTER, border=BOX, font=fnt(9, True, "6B7385"))
     m1 = m0 + max(len(months), 1) - 1
@@ -809,20 +835,22 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     ws.conditional_formatting.add(f"{CL(7 + n)}{m0}:{CL(7 + n)}{m1}", CellIsRule(operator="equal", formula=['"Gap"'], fill=fill("E6E8EC")))
     # month charts (above table)
     chm = BarChart(); chm.type = "col"; chm.grouping = "stacked"; chm.overlap = 100; chm.gapWidth = 10
-    chm.title = "Videos uploaded per month, by channel"; chm.width, chm.height = 33, 8.5
+    chm.title = "Videos uploaded per month, by channel"; chm.width, chm.height = 33, 9.5
     chm.add_data(Reference(ws, min_col=3, max_col=2 + n, min_row=mh, max_row=m1), titles_from_data=True)
     chm.set_categories(Reference(ws, min_col=2, min_row=m0, max_row=m1))
     for s_, c in zip(chm.series, colors):
         s_.graphicalProperties.solidFill = c; s_.graphicalProperties.line.solidFill = c
-    chm.legend.position = "b"; chm.x_axis.delete = False; chm.y_axis.delete = False; chm.x_axis.number_format = "mmm yyyy"
+    chm.x_axis.delete = False; chm.y_axis.delete = False; chm.x_axis.number_format = "mmm yyyy"
+    tidy(chm, left=0.045, width=0.94)
     ws.add_chart(chm, f"B{stacked_row_anchor}")
     chw = BarChart(); chw.type = "col"; chw.gapWidth = 10
-    chw.title = "Videos watched per month (only those with a Watched On date)"; chw.width, chw.height = 33, 8
+    chw.title = "Videos watched per month (only those with a Watched On date)"; chw.width, chw.height = 33, 9
     chw.add_data(Reference(ws, min_col=5 + n, min_row=mh, max_row=m1), titles_from_data=True)
     chw.set_categories(Reference(ws, min_col=2, min_row=m0, max_row=m1))
     chw.series[0].graphicalProperties.solidFill = "2E9E6B"; chw.legend = None
     chw.x_axis.delete = False; chw.y_axis.delete = False; chw.x_axis.number_format = "mmm yyyy"
-    ws.add_chart(chw, f"B{stacked_row_anchor + 18}")
+    tidy(chw, legend=False, left=0.045, width=0.94)
+    ws.add_chart(chw, f"B{stacked_row_anchor + 21}")
     ws.freeze_panes = "A5"
     protect(ws)
 
@@ -838,8 +866,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     ST = V("Status"); LN = V("Length"); CI = V("Channel ID")
 
     section(ws, 6, "Library progress", "B", "N")
-    head(ws, 7, 2, ["Channel", "Videos", "Watched", "Watch Later", "Unwatched", "Skipped", "% Watched", "Runtime (h)",
-                    "Watched (h)", "Remaining (h)", "% Runtime Watched", "Average length", "Median length"], height=36)
+    head(ws, 7, 2, ["Channel", "Videos", "Watched", "Watch Later", "Unwatched", "Skipped", "% Watched", "Runtime",
+                    "Time watched", "Time remaining", "% Runtime Watched", "Average length", "Median length"], height=36)
     A0 = 8
     for i in range(1, n + 1):
         r = A0 + i - 1
@@ -849,19 +877,19 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         for col, st in zip("DEFG", ["Watched", "Watch Later", "Unwatched", "Skipped"]):
             f(ws, f"{col}{r}", f'=COUNTIFS({CI},{c},{ST},"{st}")', fmt="#,##0", al=CENTER, border=BOX)
         f(ws, f"H{r}", f"=IFERROR(D{r}/(C{r}-G{r}),0)", fmt="0.0%", al=CENTER, border=BOX)
-        f(ws, f"I{r}", f"=SUMIFS({LN},{CI},{c})*24", fmt="#,##0.0", al=CENTER, border=BOX)
-        f(ws, f"J{r}", f'=SUMIFS({LN},{CI},{c},{ST},"Watched")*24', fmt="#,##0.0", al=CENTER, border=BOX)
-        f(ws, f"K{r}", f'=(SUMIFS({LN},{CI},{c},{ST},"Unwatched")+SUMIFS({LN},{CI},{c},{ST},"Watch Later"))*24', fmt="#,##0.0", al=CENTER, border=BOX)
-        f(ws, f"L{r}", f'=IFERROR(J{r}/(I{r}-SUMIFS({LN},{CI},{c},{ST},"Skipped")*24),0)', fmt="0.0%", al=CENTER, border=BOX)
+        f(ws, f"I{r}", f"=SUMIFS({LN},{CI},{c})", fmt=HM_FMT, al=CENTER, border=BOX)
+        f(ws, f"J{r}", f'=SUMIFS({LN},{CI},{c},{ST},"Watched")', fmt=HM_FMT, al=CENTER, border=BOX)
+        f(ws, f"K{r}", f'=(SUMIFS({LN},{CI},{c},{ST},"Unwatched")+SUMIFS({LN},{CI},{c},{ST},"Watch Later"))', fmt=HM_FMT, al=CENTER, border=BOX)
+        f(ws, f"L{r}", f'=IFERROR(J{r}/(I{r}-SUMIFS({LN},{CI},{c},{ST},"Skipped")),0)', fmt="0.0%", al=CENTER, border=BOX)
         f(ws, f"M{r}", f"=IFERROR(AVERAGEIFS({LN},{CI},{c}),0)", fmt="[h]:mm:ss", al=CENTER, border=BOX)
         ws[f"N{r}"] = ArrayFormula(f"N{r}", f"=IFERROR(MEDIAN(IF({CI}={c},{LN})),0)")
         ws[f"N{r}"].number_format = "[h]:mm:ss"; ws[f"N{r}"].alignment = CENTER; ws[f"N{r}"].border = BOX; ws[f"N{r}"].font = fnt(10)
     AT = A0 + n
     put(ws, f"B{AT}", "All channels", font=fnt(10, True), fl="EEF0F5", border=BOX)
     for col in "CDEFGIJK":
-        f(ws, f"{col}{AT}", f"=SUM({col}{A0}:{col}{AT - 1})", fmt="#,##0.0" if col in "IJK" else "#,##0", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
+        f(ws, f"{col}{AT}", f"=SUM({col}{A0}:{col}{AT - 1})", fmt=HM_FMT if col in "IJK" else "#,##0", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
     f(ws, f"H{AT}", f"=IFERROR(D{AT}/(C{AT}-G{AT}),0)", fmt="0.0%", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
-    f(ws, f"L{AT}", f'=IFERROR(J{AT}/(I{AT}-SUMIFS({LN},{ST},"Skipped")*24),0)', fmt="0.0%", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
+    f(ws, f"L{AT}", f'=IFERROR(J{AT}/(I{AT}-SUMIFS({LN},{ST},"Skipped")),0)', fmt="0.0%", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
     f(ws, f"M{AT}", f"=IFERROR(AVERAGE({LN}),0)", fmt="[h]:mm:ss", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
     f(ws, f"N{AT}", f"=IFERROR(MEDIAN({LN}),0)", fmt="[h]:mm:ss", font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
     ws.conditional_formatting.add(f"H{A0}:H{AT}", DataBarRule(start_type="num", start_value=0, end_type="num", end_value=1, color="2E9E6B"))
@@ -918,18 +946,18 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     head(ws, r + 1, 2, ["", "Last 30 days", "Last 90 days", "Last 365 days"], height=22)
     P0 = r + 2
     wins = [("C", 30), ("D", 90), ("E", 365)]
-    labels = ["Videos uploaded", "Hours uploaded", "Videos watched *", "Hours watched *", "Backlog change (videos)", "Backlog change (hours)"]
+    labels = ["Videos uploaded", "Time uploaded", "Videos watched *", "Time watched *", "Backlog change (videos)", "Backlog change (time)"]
     for k, lab in enumerate(labels):
         put(ws, f"B{P0 + k}", lab, font=fnt(10, True), border=BOX)
     for col, w in wins:
         up = f'{V("Day")},">"&TODAY()-{w}'
         wt = f'{V("Watched On")},">"&TODAY()-{w},{ST},"Watched"'
         f(ws, f"{col}{P0}", f"=COUNTIFS({up})", fmt="#,##0", al=CENTER, border=BOX)
-        f(ws, f"{col}{P0 + 1}", f"=SUMIFS({LN},{up})*24", fmt="#,##0.0", al=CENTER, border=BOX)
+        f(ws, f"{col}{P0 + 1}", f"=SUMIFS({LN},{up})", fmt=HM_FMT, al=CENTER, border=BOX)
         f(ws, f"{col}{P0 + 2}", f"=COUNTIFS({wt})", fmt="#,##0", al=CENTER, border=BOX)
-        f(ws, f"{col}{P0 + 3}", f"=SUMIFS({LN},{wt})*24", fmt="#,##0.0", al=CENTER, border=BOX)
+        f(ws, f"{col}{P0 + 3}", f"=SUMIFS({LN},{wt})", fmt=HM_FMT, al=CENTER, border=BOX)
         f(ws, f"{col}{P0 + 4}", f"={col}{P0}-{col}{P0 + 2}", fmt="+#,##0;-#,##0;0", al=CENTER, border=BOX)
-        f(ws, f"{col}{P0 + 5}", f"={col}{P0 + 1}-{col}{P0 + 3}", fmt="+#,##0.0;-#,##0.0;0.0", al=CENTER, border=BOX)
+        f(ws, f"{col}{P0 + 5}", f"=ROUND(({col}{P0 + 1}-{col}{P0 + 3})*24,0)", fmt='+#,##0" h";-#,##0" h";0" h"', al=CENTER, border=BOX)
     ws.conditional_formatting.add(f"C{P0 + 4}:E{P0 + 5}", CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="C0392B", bold=True)))
     ws.conditional_formatting.add(f"C{P0 + 4}:E{P0 + 5}", CellIsRule(operator="lessThan", formula=["0"], font=Font(color="1E6B34", bold=True)))
     e = P0 + 6
@@ -940,7 +968,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     put(ws, f"B{e + 1}", "* Counts only videos with a 'Watched On' date.", font=fnt(8, color="6B7385", italic=True))
 
     r = e + 4
-    section(ws, r, "Records & library health", "B", "N")
+    section(ws, r, "Records", "B", "N")
     rec = [
         ("Longest video", f"=MAX({LN})", "[h]:mm:ss", f'=INDEX({V("Title")},MATCH(MAX({LN}),{LN},0))'),
         ("Shortest video (>0)", f'=IFERROR(_xlfn.MINIFS({LN},{LN},">0"),"")', "[h]:mm:ss", f'=IFERROR(INDEX({V("Title")},MATCH(C{r + 2},{LN},0)),"")'),
@@ -953,15 +981,6 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         put(ws, f"B{rr}", lab, font=fnt(10, True), border=BOX)
         f(ws, f"C{rr}", fm, fmt=nf, al=CENTER, border=BOX)
         f(ws, f"D{rr}", ttl, font=fnt(9))
-    h0 = r + 6
-    health = [("Videos without a Video ID yet", f'=COUNTIFS({V("Video ID")},"")'),
-              ("Not found in last refresh (removed/private?)", f'=COUNTIFS({V("Availability")},"Not in last refresh")'),
-              ("Marked Watched but no 'Watched On' date", f'=COUNTIFS({ST},"Watched",{V("Watched On")},"",{V("Mark")},"Watched")'),
-              ("Zero-length videos (premieres/live placeholders)", f"=COUNTIFS({LN},0)")]
-    for k, (lab, fm) in enumerate(health):
-        put(ws, f"B{h0 + k}", lab, font=fnt(10), border=BOX)
-        f(ws, f"C{h0 + k}", fm, fmt="#,##0", al=CENTER, border=BOX)
-    ws.merge_cells(start_row=h0, start_column=2, end_row=h0, end_column=2)
     ws.column_dimensions["B"].width = 44
     ws.freeze_panes = "A5"
     protect(ws)
@@ -987,8 +1006,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         ("WATCHED", f"=Stats!D{AT}", "#,##0", f'="of "&TEXT(Stats!C{AT}-Stats!G{AT},"#,##0")&" tracked"'),
         ("BACKLOG", f"=Stats!E{AT}+Stats!F{AT}", "#,##0", f'=TEXT(Stats!E{AT},"#,##0")&" watch-later"'),
         ("% WATCHED", f"=Stats!H{AT}", "0.0%", f'=TEXT(Stats!L{AT},"0.0%")&" of runtime"'),
-        ("HOURS WATCHED", f"=Stats!J{AT}", "#,##0", f'="of "&TEXT(Stats!I{AT},"#,##0")&" h total"'),
-        ("HOURS REMAINING", f"=Stats!K{AT}", "#,##0", f'="≈ "&TEXT(Stats!K{AT}/24,"#,##0")&" days of video"'),
+        ("HOURS WATCHED", f"=Stats!J{AT}*24", '#,##0" h"', f'="of "&TEXT(Stats!I{AT}*24,"#,##0")&" h total"'),
+        ("HOURS REMAINING", f"=Stats!K{AT}*24", '#,##0" h"', f'="≈ "&TEXT(Stats!K{AT},"#,##0")&" days of video"'),
     ]
     for k, (lab, fm, nf, sub) in enumerate(tiles):
         c1, c2 = CL(2 + 2 * k), CL(3 + 2 * k)
@@ -1002,13 +1021,13 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     ws.row_dimensions[7].height = 34
 
     section(ws, 10, "By channel")
-    head(ws, 11, 2, ["Channel", "", "", "Videos", "Watched", "Backlog", "% Watched", "Hours left", "Latest upload", "", "Days since", ""], height=22)
+    head(ws, 11, 2, ["Channel", "", "", "Videos", "Watched", "Backlog", "% Watched", "Time left", "Latest upload", "", "Days since", ""], height=22)
     ws.merge_cells("B11:D11"); ws.merge_cells("J11:K11"); ws.merge_cells("L11:M11")
     for i in range(1, n + 1):
         r = 11 + i; ar = A0 + i - 1; br = B0 + i - 1
         ws.merge_cells(f"B{r}:D{r}"); ws.merge_cells(f"J{r}:K{r}"); ws.merge_cells(f"L{r}:M{r}")
         f(ws, f"B{r}", f"=Stats!B{ar}", font=fnt(10, True), fl=tint(colors[i - 1]), border=BOX)
-        for col, src, nf in [("E", "C", "#,##0"), ("F", "D", "#,##0"), ("H", "H", "0.0%"), ("I", "K", "#,##0")]:
+        for col, src, nf in [("E", "C", "#,##0"), ("F", "D", "#,##0"), ("H", "H", "0.0%"), ("I", "K", HM_FMT)]:
             f(ws, f"{col}{r}", f"=Stats!{src}{ar}", fmt=nf, al=CENTER, border=BOX)
         f(ws, f"G{r}", f"=Stats!E{ar}+Stats!F{ar}", fmt="#,##0", al=CENTER, border=BOX)
         f(ws, f"J{r}", f"=Stats!D{br}", fmt="d mmm yyyy", al=CENTER, border=BOX)
@@ -1017,29 +1036,32 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     ws.merge_cells(f"B{r}:D{r}")
     put(ws, f"B{r}", "All channels", font=fnt(10, True), fl="EEF0F5", border=BOX)
     for col, fm, nf in [("E", f"=Stats!C{AT}", "#,##0"), ("F", f"=Stats!D{AT}", "#,##0"), ("G", f"=Stats!E{AT}+Stats!F{AT}", "#,##0"),
-                        ("H", f"=Stats!H{AT}", "0.0%"), ("I", f"=Stats!K{AT}", "#,##0")]:
+                        ("H", f"=Stats!H{AT}", "0.0%"), ("I", f"=Stats!K{AT}", HM_FMT)]:
         f(ws, f"{col}{r}", fm, fmt=nf, font=fnt(10, True), al=CENTER, border=BOX, fl="EEF0F5")
     ws.conditional_formatting.add(f"H12:H{11 + n}", DataBarRule(start_type="num", start_value=0, end_type="num", end_value=1, color="2E9E6B"))
 
     cr = r + 2
     bc = BarChart(); bc.type = "bar"; bc.grouping = "stacked"; bc.overlap = 100; bc.gapWidth = 50
-    bc.title = "Watched vs. backlog (videos)"; bc.width, bc.height = 14.5, 7.5
+    bc.title = "Watched vs. backlog (videos)"; bc.width, bc.height = 13.6, 8.5
     bs = W["Stats"]
     for col, color in [(4, "2E9E6B"), (5, "E0B33A"), (6, "C5CAD6")]:
         bc.add_data(Reference(bs, min_col=col, min_row=7, max_row=A0 + n - 1), titles_from_data=True)
     bc.set_categories(Reference(bs, min_col=2, min_row=A0, max_row=A0 + n - 1))
     for s_, c in zip(bc.series, ["2E9E6B", "E0B33A", "C5CAD6"]):
         s_.graphicalProperties.solidFill = c; s_.graphicalProperties.line.solidFill = c
-    bc.legend.position = "b"; bc.x_axis.delete = False; bc.y_axis.delete = False; bc.x_axis.scaling.orientation = "maxMin"
+    bc.x_axis.delete = False; bc.y_axis.delete = False; bc.x_axis.scaling.orientation = "maxMin"
+    bc.y_axis.crosses = "max"      # keep the value-axis numbers at the bottom
+    tidy(bc, left=0.30, width=0.64)
     ws.add_chart(bc, f"B{cr}")
-    yc = BarChart(); yc.type = "col"; yc.gapWidth = 40; yc.title = "Videos uploaded per year"; yc.width, yc.height = 14.5, 7.5
+    yc = BarChart(); yc.type = "col"; yc.gapWidth = 40; yc.title = "Videos uploaded per year"; yc.width, yc.height = 13.6, 8.5
     yc.add_data(Reference(H, min_col=3 + n, min_row=ph, max_row=py1), titles_from_data=True)
     yc.set_categories(Reference(H, min_col=2, min_row=py0, max_row=py1))
     yc.series[0].graphicalProperties.solidFill = TEAL; yc.legend = None
     yc.x_axis.delete = False; yc.y_axis.delete = False
+    tidy(yc, legend=False)
     ws.add_chart(yc, f"H{cr}")
 
-    ur = cr + 16
+    ur = cr + 19
     section(ws, ur, "Up next  -  oldest unwatched video in each channel")
     head(ws, ur + 1, 2, ["Channel", "", "", "Video", "", "", "", "", "", "", "Length", "Published"], height=20)
     ws.merge_cells(f"B{ur + 1}:D{ur + 1}"); ws.merge_cells(f"E{ur + 1}:K{ur + 1}")
@@ -1085,7 +1107,9 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     dv_list(ws, "C4", '"Unwatched,Watch Later"'); dv_list(ws, "D4", "=ChannelList"); dv_list(ws, "E4", '"Oldest first,Newest first"')
     f(ws, "K4", crit_formula("$D$4"))
     ws.column_dimensions.group("I", "K", hidden=True)
-    f(ws, "B5", f'=COUNT({V("Queue Key")})&" videos match   ·   "&TEXT(SUMIFS({LN},{V("Queue Key")},">0"),"[h]:mm")&" of runtime"',
+    qk = V("Queue Key")
+    q_rt = hm("SUMIFS(" + LN + "," + qk + ',">0")')
+    f(ws, "B5", '=COUNT(' + qk + ')&" videos match   ·   "&' + q_rt + '&" of runtime"',
       font=fnt(9, True, "6B7385"))
     head(ws, 7, 2, ["#", "Published", "Channel", "Title", "Length", "Status"], height=22)
     QN = 30
@@ -1120,11 +1144,12 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     selector(ws, "G4", sel("Calendar", "G4", "All channels"), "G3", "Channel")
     dv_list(ws, "C4", "=YearList"); dv_list(ws, "E4", "=MonthList"); dv_list(ws, "G4", "=ChannelList")
     f(ws, "K2", "=DATE($C$4,MATCH($E$4,MonthList,0),1)", fmt="yyyy-mm-dd")
-    f(ws, "K3", "=K2-(WEEKDAY(K2,2)-1)", fmt="yyyy-mm-dd")
+    f(ws, "K3", "=K2-(WEEKDAY(K2,1)-1)", fmt="yyyy-mm-dd")
     f(ws, "K4", crit_formula("$G$4"))
     put(ws, "J2", "month start"); put(ws, "J3", "grid start"); put(ws, "J4", "channel crit")
     sf = f'{V("Day")},">="&$K$2,{V("Day")},"<"&EDATE($K$2,1),{V("Channel ID")},$K$4'
-    f(ws, "B6", f'="Videos: "&COUNTIFS({sf})&"      Runtime: "&TEXT(SUMIFS({LN},{sf}),"[h]:mm")&"      Watched: "&COUNTIFS({sf},{ST},"Watched")&" of "&COUNTIFS({sf})',
+    cal_rt = hm("SUMIFS(" + LN + "," + sf + ")")
+    f(ws, "B6", '="Videos: "&COUNTIFS(' + sf + ')&"      Runtime: "&' + cal_rt + '&"      Watched: "&COUNTIFS(' + sf + ',' + ST + ',"Watched")&" of "&COUNTIFS(' + sf + ')',
       font=fnt(11, True, NAVY))
     legend = []
     for i in range(n):
@@ -1133,7 +1158,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         cell = f"{col}{rr}"
         f(ws, cell, f'=Channels!$C${CH_HDR + 1 + i}&"  ("&COUNTIFS({V("Day")},">="&$K$2,{V("Day")},"<"&EDATE($K$2,1),{CI},Channels!$E${CH_HDR + 1 + i})&")"',
           font=fnt(9, True, "333333"), fl=tint(colors[i]), al=CENTER, border=BOX)
-    for ci, lab in enumerate(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]):
+    for ci, lab in enumerate(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]):
         put(ws, f"{CL(2 + ci)}9", lab, font=fnt(10, True, "FFFFFF"), fl=NAVY, al=CENTER)
     R0 = 10
     slot_ranges, block_cf = [], []
@@ -1145,7 +1170,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
             f(ws, f"{g2}{h}", f'=IF(MONTH({g1}{h})=MONTH($K$2),COUNTIFS({V("Day")},{g1}{h},{CI},$K$4),0)')
             f(ws, f"{g3}{h}", f'=IF({g2}{h}>0,SUMIFS({LN},{V("Day")},{g1}{h},{CI},$K$4),0)')
             f(ws, f"{cal}{h}",
-              f'=IF(MONTH({g1}{h})=MONTH($K$2),DAY({g1}{h})&IF({g2}{h}>0,"   ·   "&{g2}{h}&IF({g2}{h}=1," video"," videos")&"   ·   "&TEXT({g3}{h},"[h]:mm")&IF({g2}{h}>{MAX_SLOTS},"   (+"&({g2}{h}-{MAX_SLOTS})&" more)",""),""),"")',
+              f'=IF(MONTH({g1}{h})=MONTH($K$2),DAY({g1}{h})&IF({g2}{h}>0,"   ·   "&{g2}{h}&IF({g2}{h}=1," video"," videos")&"   ·   "&{hm(g3 + str(h))}&IF({g2}{h}>{MAX_SLOTS},"   (+"&({g2}{h}-{MAX_SLOTS})&" more)",""),""),"")',
               font=fnt(10, True, NAVY), fl="E9ECF3", al=LEFT, border=BOX)
             for s in range(1, MAX_SLOTS + 1):
                 rs = h + s
@@ -1173,6 +1198,31 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     # ---- finishing
     for nm in ("Library", "Channels", "Settings"):
         pass
+    if fan:
+        ws = W["Carry Over"]
+        ws.sheet_properties.tabColor = GOLD
+        put(ws, "A1", "STEP 1 - Paste your OLD Library here.  In your old workbook open the Library sheet, click the small square at the very "
+                      "top-left (select all), press Ctrl+C. Come back here, click cell A1, then Paste Special > Values.",
+            font=fnt(11, True, NAVY))
+        put(ws, "A2", "(This note disappears when you paste - that's expected. Both files must come from this site / this tool so the columns line up.)",
+            font=fnt(9, False, "6B7385", italic=True))
+        last_co = HDR + max(N, 1)
+        f(ws, "Y1", f'="CARRY OVER  -  "&COUNT(Y{HDR + 1}:Y{last_co})&" of {N} videos matched with your old file"', font=fnt(12, True, TEAL))
+        put(ws, "Y2", "STEP 2 - Copy columns Z:AA (from row 6 down). In the Library sheet click cell C6, then Paste Special > Values.  (Clear any Library filters first.)", font=fnt(10, True, NAVY))
+        put(ws, "Y3", "STEP 3 - Copy column AB (Notes). In the Library sheet click cell L6, then Paste Special > Values.", font=fnt(10, True, NAVY))
+        put(ws, "Y4", "STEP 4 - On the Channels sheet, re-enter your 'Watched Through' dates. Done - you can delete this sheet.", font=fnt(10, True, NAVY))
+        for col, lab in zip(["Y", "Z", "AA", "AB"], ["Matched row in old file", "Mark  (-> Library C)", "Watched On  (-> Library D)", "Notes  (-> Library L)"]):
+            put(ws, f"{col}{HDR}", lab, font=fnt(9, True, "FFFFFF"), fl=GOLD, al=CENTER, border=BOX)
+        ws.row_dimensions[HDR].height = 30
+        for r in range(HDR + 1, last_co + 1):
+            f(ws, f"Y{r}", f'=IFERROR(MATCH(Library!M{r},$M$6:$M$40000,0),"")', font=fnt(9, color="6B7385"))
+            f(ws, f"Z{r}", f'=IF($Y{r}="","",INDEX($C$6:$C$40000,$Y{r})&"")')
+            f(ws, f"AA{r}", f'=IF($Y{r}="","",IF(INDEX($D$6:$D$40000,$Y{r})="","",INDEX($D$6:$D$40000,$Y{r})))', fmt="yyyy-mm-dd")
+            f(ws, f"AB{r}", f'=IF($Y{r}="","",INDEX($L$6:$L$40000,$Y{r})&"")')
+        for col, w in zip(["Y", "Z", "AA", "AB"], [16, 16, 16, 40]):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = f"A{HDR + 1}"
+
     from openpyxl.worksheet.properties import PageSetupProperties
     for nm in ("Dashboard", "Queue", "Calendar", "History", "Stats", "Channels", "Settings", "Library"):
         w_ = W[nm]

@@ -28,7 +28,7 @@ nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
 nav::-webkit-scrollbar{display:none}
 nav a{color:rgba(255,255,255,.75);text-decoration:none;padding:10px 14px;border-bottom:3px solid transparent;white-space:nowrap;font-weight:500}
 nav a.on{color:#fff;border-color:var(--acc)}
-main{padding:18px 0 40px;min-height:60vh}
+main.wrap{padding:30px 16px 40px;min-height:60vh}
 h2{font-size:18px;margin:0 0 10px}
 h3{font-size:15px;margin:0 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);margin-bottom:16px}
@@ -88,6 +88,19 @@ tr.tot td{font-weight:700;background:rgba(var(--acc-rgb),.08)}
 .note{background:rgba(var(--acc-rgb),.08);border:1px solid rgba(var(--acc-rgb),.3);border-radius:10px;padding:10px 14px}
 ol.steps li{margin:6px 0}
 .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.dl{color:var(--mut);text-decoration:none;border-bottom:1px dotted var(--mut)}
+.dl:hover{color:var(--acc);border-color:var(--acc)}
+mark{background:rgba(255,196,0,.4);color:inherit;border-radius:2px;padding:0 1px}
+h3.sec{margin:18px 0 8px;padding-top:12px;border-top:1px solid var(--line)}
+h3.sec:first-child{border:0;margin-top:0;padding-top:0}
+.snip{grid-column:1/-1;font-size:12.5px;color:var(--mut);margin:0 0 2px 106px;line-height:1.4}
+.rec{display:grid;grid-template-columns:190px 1fr;gap:2px 12px;padding:7px 0;border-bottom:1px solid var(--line)}
+.rec:last-child{border:0}
+.scroll table th:first-child,.scroll table td:first-child{position:sticky;left:0;z-index:2}
+.scroll table th:first-child{background:var(--head)}
+.scroll table td:first-child{background:var(--card);box-shadow:1px 0 0 var(--line)}
+.scroll table tr.tot td:first-child{background:color-mix(in srgb,var(--acc) 12%,var(--card))}
+@media(max-width:640px){.snip{margin-left:0}.rec{grid-template-columns:1fr}}
 footer{border-top:1px solid var(--line);color:var(--mut);font-size:12.5px;padding:16px 0 30px}
 .empty{color:var(--mut);padding:18px;text-align:center}
 </style>
@@ -125,9 +138,9 @@ const D=JSON.parse($('#data').textContent);
 const CH=D.channels;
 const MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MS=MN.map(m=>m.slice(0,3));
-const WD=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const V=D.videos.map(a=>({id:a[0],t:a[1],c:a[2],d:a[3],tm:a[4],s:a[5],v:a[6]}));
-for(const v of V){const p=v.d.split('-');v.y=+p[0];v.m=+p[1];v.dd=+p[2];const u=Date.UTC(v.y,v.m-1,v.dd);v.day=u/864e5;v.mk=v.y*12+v.m-1;v.dow=(new Date(u).getUTCDay()+6)%7;v.hr=+v.tm.slice(0,2)}
+const WD=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const V=D.videos.map(a=>({id:a[0],t:a[1],c:a[2],d:a[3],tm:a[4],s:a[5],v:a[6],x:a[7]||''}));
+for(const v of V){const p=v.d.split('-');v.y=+p[0];v.m=+p[1];v.dd=+p[2];const u=Date.UTC(v.y,v.m-1,v.dd);v.day=u/864e5;v.mk=v.y*12+v.m-1;v.dow=new Date(u).getUTCDay();v.tl=v.t.toLowerCase();v.xl=v.x.toLowerCase();v.hr=+v.tm.slice(0,2)}
 V.sort((a,b)=>a.day-b.day||a.tm.localeCompare(b.tm)||a.t.localeCompare(b.t));
 const MK0=V[0].mk, MK1=V[V.length-1].mk, Y0=V[0].y, Y1=V[V.length-1].y;
 const byMonth=new Map(); for(const v of V){(byMonth.get(v.mk)||byMonth.set(v.mk,[]).get(v.mk)).push(v)}
@@ -135,9 +148,10 @@ const byMonth=new Map(); for(const v of V){(byMonth.get(v.mk)||byMonth.set(v.mk,
 const fmtN=n=>Math.round(n).toLocaleString('en-US');
 const p2=n=>String(n).padStart(2,'0');
 const dur=s=>{const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return h?`${h}:${p2(m)}:${p2(x)}`:`${m}:${p2(x)}`};
-const fmtH=s=>{const h=s/3600;return (h>=100?fmtN(h):h.toFixed(1))+' h'};
+const fmtH=s=>{const m=Math.round(s/60),h=Math.floor(m/60),r=m%60;return h?fmtN(h)+' h'+(r?' '+r+' m':''):r+' m'};
 const url=v=>v.id?`https://www.youtube.com/watch?v=${v.id}`:`https://www.youtube.com/results?search_query=${encodeURIComponent(v.t+' '+CH[v.c].n)}`;
 const dstr=v=>`${MS[v.m-1]} ${v.dd}, ${v.y}`;
+const dl=v=>`<a class="dl" href="#calendar/${v.d}" title="Open this day in the calendar">${dstr(v)}</a>`;
 const chip=c=>`<span class="chip" style="--c:${CH[c].c}">${esc(CH[c].n)}</span>`;
 const link=v=>`<a href="${url(v)}" target="_blank" rel="noopener">${esc(v.t)}</a>`;
 const sum=(a,f)=>a.reduce((x,y)=>x+f(y),0);
@@ -186,57 +200,84 @@ views.overview=()=>{
  <div class="grid chcards" style="margin-bottom:16px">${CH.map((c,i)=>{const a=V.filter(v=>v.c===i);return `
   <div class="chcard" style="--c:${c.c}"><b>${esc(c.n)}</b>
    <small>${fmtN(a.length)} videos &middot; ${fmtH(sum(a,v=>v.s))} &middot; ${a[0].y}-${a[a.length-1].y}</small>
-   <div class="row"><a class="btn sm" href="#library" data-lib-ch="${i}">Browse</a><button class="btn sm" data-rand="${i}">🎲 Random</button>
+   <div class="row"><a class="btn sm" href="#library" data-lib-ch="${i}">Browse</a>
    <a class="btn sm" href="https://www.youtube.com/channel/${c.id}" target="_blank" rel="noopener">YouTube ↗</a></div></div>`}).join('')}</div>
  <div class="card"><h3>Videos uploaded per year</h3>${stacked({cats:years.map(String),series:seriesBy(years,(ci,y)=>cnt[y-Y0].filter(v=>v.c===ci).length),label:'Videos per year by channel'})}${legend()}</div>
  <div class="two">
-  <div class="card"><h3>Newest uploads</h3><div class="list">${newest.map(v=>`<div class="item"><span class="d">${dstr(v)}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)}</span></div>`).join('')}</div></div>
+  <div class="card"><h3>Newest uploads</h3><div class="list">${newest.map(v=>`<div class="item"><span class="d">${dl(v)}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)}</span></div>`).join('')}</div></div>
   <div class="card"><h3>On this day in SCB history <span class="sub">(${MN[tm-1]} ${td})</span></h3>
-   ${otd.length?`<div class="list">${otd.map(v=>`<div class="item"><span class="d">${v.y} &middot; ${now.getFullYear()-v.y}y ago</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)}</span></div>`).join('')}</div>`:'<div class="empty">Nothing was uploaded on this date in past years.</div>'}
-   <p style="margin:12px 0 0"><button class="btn" data-rand="-1">🎲 Surprise me with a random video</button></p>
-   <div id="randOut" style="margin-top:10px"></div></div>
- </div>`;
- app.querySelectorAll('[data-rand]').forEach(b=>b.onclick=()=>{const ci=+b.dataset.rand,pool=ci<0?V:V.filter(v=>v.c===ci),v=pool[Math.floor(Math.random()*pool.length)];
-  let o=$('#randOut');if(!o){o=document.createElement('div');o.id='randOut';b.closest('.chcard').after(o)}
-  o.innerHTML=`<div class="note">🎲 ${chip(v.c)} <b>${link(v)}</b><br><span class="sub">${dstr(v)} &middot; ${dur(v.s)} &middot; ${fmtN(v.v)} views</span></div>`;
-  o.scrollIntoView({block:'nearest',behavior:'smooth'})});
- app.querySelectorAll('[data-lib-ch]').forEach(a=>a.onclick=()=>{lib.ch=new Set([+a.dataset.libCh]);lib.n=60});
+   ${otd.length?`<div class="list">${otd.map(v=>`<div class="item"><span class="d">${dl(v)}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${now.getFullYear()-v.y}y ago &middot; ${dur(v.s)}</span></div>`).join('')}</div>`:'<div class="empty">Nothing was uploaded on this date in past years.</div>'}</div>
+ </div>
+ <div class="card"><h3>🎲 Random video</h3>
+  <div class="controls">${chSel('rch',-1,'Any channel')}<button class="btn pri" id="rbtn">Surprise me</button></div>
+  <div id="randOut" class="sub">Pick a channel (or leave it on "Any channel") and press the button.</div></div>`;
+ $('#rbtn').onclick=()=>{const ci=+$('#rch').value,pool=ci<0?V:V.filter(v=>v.c===ci),v=pool[Math.floor(Math.random()*pool.length)];
+  $('#randOut').innerHTML=`<div class="note">${chip(v.c)} <b>${link(v)}</b><br><span class="sub">${dl(v)} &middot; ${dur(v.s)} &middot; ${fmtN(v.v)} views</span></div>`};
+ app.querySelectorAll('[data-lib-ch]').forEach(a=>a.onclick=()=>{lib.ch=new Set([+a.dataset.libCh]);lib.n1=60});
 };
 
 /* Library */
-const lib={q:'',ch:new Set(),year:'',len:'',sort:'new',n:60};
+const lib={q:'',ch:new Set(),year:'',len:'',sort:'new',n1:60,n2:30};
 const LENS={'':[0,1e9],a:[0,300],b:[300,1200],c:[1200,3600],d:[3600,1e9]};
-function libFiltered(){
+const SORTS={new:(a,b)=>b.day-a.day||b.tm.localeCompare(a.tm),old:(a,b)=>a.day-b.day||a.tm.localeCompare(b.tm),views:(a,b)=>b.v-a.v,long:(a,b)=>b.s-a.s,short:(a,b)=>a.s-b.s,az:(a,b)=>a.t.localeCompare(b.t)};
+const reEsc=w=>w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const hl=(t,words)=>{if(!words.length)return esc(t);const re=new RegExp('('+words.map(reEsc).join('|')+')','gi');return t.split(re).map((p,i)=>i%2?'<mark>'+esc(p)+'</mark>':esc(p)).join('')};
+function snippet(v,words){
+ const low=v.xl;let at=-1;for(const w of words){const i=low.indexOf(w);if(i>=0&&(at<0||i<at))at=i}
+ if(at<0)at=0;const s=Math.max(0,at-70),e=Math.min(v.x.length,at+130);
+ return (s>0?'… ':'')+hl(v.x.slice(s,e),words)+(e<v.x.length?' …':'');
+}
+function libLists(){
  const words=lib.q.toLowerCase().split(/\s+/).filter(Boolean),[lo,hi]=LENS[lib.len];
- let r=V.filter(v=>(!lib.ch.size||lib.ch.has(v.c))&&(!lib.year||v.y===+lib.year)&&v.s>=lo&&v.s<hi&&words.every(w=>v.t.toLowerCase().includes(w)));
- const S={new:(a,b)=>b.day-a.day||b.tm.localeCompare(a.tm),old:(a,b)=>a.day-b.day||a.tm.localeCompare(b.tm),views:(a,b)=>b.v-a.v,long:(a,b)=>b.s-a.s,short:(a,b)=>a.s-b.s,az:(a,b)=>a.t.localeCompare(b.t)};
- return r.sort(S[lib.sort]);
+ const base=V.filter(v=>(!lib.ch.size||lib.ch.has(v.c))&&(!lib.year||v.y===+lib.year)&&v.s>=lo&&v.s<hi);
+ if(!words.length)return {words,title:base.sort(SORTS[lib.sort]),desc:[]};
+ const title=[],desc=[];
+ for(const v of base){if(words.every(w=>v.tl.includes(w)))title.push(v);else if(words.every(w=>v.xl.includes(w)))desc.push(v)}
+ return {words,title:title.sort(SORTS[lib.sort]),desc:desc.sort(SORTS[lib.sort])};
 }
 views.library=()=>{
  const yrs=[];for(let y=Y1;y>=Y0;y--)yrs.push(y);
  app.innerHTML=`<div class="card">
-  <div class="controls"><input type="search" id="q" placeholder="Search titles..." value="${esc(lib.q)}" aria-label="Search titles">
+  <div class="controls"><input type="search" id="q" placeholder="Search titles and descriptions..." value="${esc(lib.q)}" aria-label="Search titles and descriptions">
    <select id="yr"><option value="">All years</option>${yrs.map(y=>`<option${lib.year==y?' selected':''}>${y}</option>`).join('')}</select>
    <select id="ln"><option value="">Any length</option><option value="a">Under 5 min</option><option value="b">5-20 min</option><option value="c">20-60 min</option><option value="d">Over 1 hour</option></select>
    <select id="so"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="views">Most viewed</option><option value="long">Longest</option><option value="short">Shortest</option><option value="az">Title A-Z</option></select></div>
   <div class="controls" id="chips">${CH.map((c,i)=>`<span class="chip tog${lib.ch.has(i)?' on':''}" data-i="${i}" style="--c:${c.c}" role="button" tabindex="0">${esc(c.n)}</span>`).join('')}<span class="sub">(none selected = all channels)</span></div>
   <div class="controls"><span class="sub" id="cnt"></span><span style="flex:1"></span><button class="btn sm" id="csv">⬇ Export these results (CSV)</button><button class="btn sm" id="clr">Reset</button></div>
-  <div class="list" id="res"></div><p style="text-align:center"><button class="btn" id="more">Show more</button></p></div>`;
+  <div id="res"></div></div>`;
  $('#ln').value=lib.len;$('#so').value=lib.sort;
  let timer;
- const draw=()=>{const r=libFiltered();$('#cnt').textContent=`${fmtN(r.length)} videos · ${fmtH(sum(r,v=>v.s))}`;
-  $('#res').innerHTML=r.slice(0,lib.n).map(v=>`<div class="item"><span class="d">${dstr(v)}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span></div>`).join('')||'<div class="empty">No videos match.</div>';
-  $('#more').style.display=r.length>lib.n?'':'none';$('#more').textContent=`Show more (${fmtN(r.length-lib.n)} left)`;return r};
- $('#q').oninput=e=>{clearTimeout(timer);timer=setTimeout(()=>{lib.q=e.target.value;lib.n=60;draw()},150)};
- $('#yr').onchange=e=>{lib.year=e.target.value;lib.n=60;draw()};
- $('#ln').onchange=e=>{lib.len=e.target.value;lib.n=60;draw()};
- $('#so').onchange=e=>{lib.sort=e.target.value;lib.n=60;draw()};
- $('#more').onclick=()=>{lib.n+=120;draw()};
- $('#clr').onclick=()=>{Object.assign(lib,{q:'',ch:new Set(),year:'',len:'',sort:'new',n:60});views.library()};
- const tog=el=>{const i=+el.dataset.i;lib.ch.has(i)?lib.ch.delete(i):lib.ch.add(i);el.classList.toggle('on');lib.n=60;draw()};
+ const row=(v,words,sn)=>`<div class="item"><span class="d">${dl(v)}</span><span class="t">${chip(v.c)}<a href="${url(v)}" target="_blank" rel="noopener">${hl(v.t,words)}</a></span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span>${sn?`<div class="snip">${snippet(v,words)}</div>`:''}</div>`;
+ const draw=()=>{
+  const L=libLists(),{words,title,desc}=L;
+  if(!words.length){
+   $('#cnt').textContent=`${fmtN(title.length)} videos · ${fmtH(sum(title,v=>v.s))}`;
+   $('#res').innerHTML=`<div class="list">${title.slice(0,lib.n1).map(v=>row(v,words,false)).join('')||'<div class="empty">No videos match.</div>'}</div>`+
+    (title.length>lib.n1?`<p style="text-align:center"><button class="btn" data-more="1">Show more (${fmtN(title.length-lib.n1)} left)</button></p>`:'');
+  }else{
+   $('#cnt').textContent=`${fmtN(title.length)} in titles · ${fmtN(desc.length)} in descriptions only`;
+   $('#res').innerHTML=
+    `<h3 class="sec">📺 Videos with "${esc(lib.q.trim())}" in the title <span class="sub">(${fmtN(title.length)})</span></h3>
+     <div class="list">${title.slice(0,lib.n1).map(v=>row(v,words,false)).join('')||'<div class="empty">No titles match.</div>'}</div>`+
+    (title.length>lib.n1?`<p style="text-align:center"><button class="btn" data-more="1">Show more titles (${fmtN(title.length-lib.n1)} left)</button></p>`:'')+
+    `<h3 class="sec">📝 Videos with "${esc(lib.q.trim())}" in the description <span class="sub">(${fmtN(desc.length)})</span></h3>
+     <p class="sub" style="margin:0 0 6px">Only videos whose title does <i>not</i> already match. Descriptions are shortened and sponsor boilerplate is removed.</p>
+     <div class="list">${desc.slice(0,lib.n2).map(v=>row(v,words,true)).join('')||'<div class="empty">No other descriptions match.</div>'}</div>`+
+    (desc.length>lib.n2?`<p style="text-align:center"><button class="btn" data-more="2">Show more descriptions (${fmtN(desc.length-lib.n2)} left)</button></p>`:'');
+  }
+  return L;
+ };
+ $('#res').onclick=e=>{const b=e.target.closest('[data-more]');if(!b)return;if(b.dataset.more==='1')lib.n1+=120;else lib.n2+=60;draw()};
+ $('#q').oninput=e=>{clearTimeout(timer);timer=setTimeout(()=>{lib.q=e.target.value;lib.n1=60;lib.n2=30;draw()},150)};
+ $('#yr').onchange=e=>{lib.year=e.target.value;lib.n1=60;lib.n2=30;draw()};
+ $('#ln').onchange=e=>{lib.len=e.target.value;lib.n1=60;lib.n2=30;draw()};
+ $('#so').onchange=e=>{lib.sort=e.target.value;lib.n1=60;lib.n2=30;draw()};
+ $('#clr').onclick=()=>{Object.assign(lib,{q:'',ch:new Set(),year:'',len:'',sort:'new',n1:60,n2:30});views.library()};
+ const tog=el=>{const i=+el.dataset.i;lib.ch.has(i)?lib.ch.delete(i):lib.ch.add(i);el.classList.toggle('on');lib.n1=60;lib.n2=30;draw()};
  $('#chips').querySelectorAll('.tog').forEach(el=>{el.onclick=()=>tog(el);el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();tog(el)}}});
- $('#csv').onclick=()=>{const q=s=>'"'+String(s).replace(/"/g,'""')+'"';
-  const rows=[['Date','Time (ET)','Channel','Title','Length','Views','URL'],...libFiltered().map(v=>[v.d,v.tm,CH[v.c].n,v.t,dur(v.s),v.v,url(v)])];
+ $('#csv').onclick=()=>{const q=s=>'"'+String(s).replace(/"/g,'""')+'"',L=libLists();
+  const mk=(v,m)=>[v.d,v.tm,CH[v.c].n,v.t,dur(v.s),v.v,url(v),m];
+  const rows=[['Date','Time (ET)','Channel','Title','Length','Views','URL','Match'],...L.title.map(v=>mk(v,L.words.length?'Title':'')),...L.desc.map(v=>mk(v,'Description'))];
   const b=new Blob(['\ufeff'+rows.map(r=>r.map(q).join(',')).join('\r\n')],{type:'text/csv'}),a=document.createElement('a');
   a.href=URL.createObjectURL(b);a.download='scb_videos.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
  draw();
@@ -245,12 +286,14 @@ views.library=()=>{
 /* Calendar */
 const cal={ch:-1,sel:null};
 views.calendar=(arg)=>{
- let y,m; const mm=/^(\d{4})-(\d{1,2})$/.exec(arg||'');
- if(mm){y=+mm[1];m=+mm[2]-1}else{y=Math.floor(MK1/12);m=MK1%12}
- let mk=Math.min(Math.max(mkOf(y,m),MK0),MK1);y=Math.floor(mk/12);m=mk%12;
- const go=k=>{location.hash=`#calendar/${Math.floor(k/12)}-${p2(k%12+1)}`};
+ let y,m,dd=null; const mm=/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/.exec(arg||'');
+ if(mm){y=+mm[1];m=+mm[2]-1;if(mm[3])dd=+mm[3]}else{y=Math.floor(MK1/12);m=MK1%12}
+ const mk=Math.min(Math.max(mkOf(y,m),MK0),MK1);y=Math.floor(mk/12);m=mk%12;
+ arg=`${y}-${p2(m+1)}`;
+ if(dd){cal.sel=dd;cal.ch=-1;history.replaceState(null,'','#calendar/'+arg)}   /* arrived from a date link */
+ const go=k=>{cal.sel=null;location.hash=`#calendar/${Math.floor(k/12)}-${p2(k%12+1)}`};
  const list=(byMonth.get(mk)||[]).filter(v=>cal.ch<0||v.c===cal.ch);
- const first=new Date(Date.UTC(y,m,1)),off=(first.getUTCDay()+6)%7,dim=new Date(Date.UTC(y,m+1,0)).getUTCDate();
+ const first=new Date(Date.UTC(y,m,1)),off=first.getUTCDay(),dim=new Date(Date.UTC(y,m+1,0)).getUTCDate();
  const days={};for(const v of list)(days[v.dd]||(days[v.dd]=[])).push(v);
  const weeks=Math.ceil((off+dim)/7);
  let cells=WD.map(w=>`<div class="wd">${w}</div>`).join('');
@@ -270,8 +313,9 @@ views.calendar=(arg)=>{
    <button class="btn sm" id="lt">Latest</button><span class="sub hide-m">tip: ← → keys change month</span></div>
   <h2>${MN[m]} ${y} <span class="sub">${list.length} video${list.length===1?'':'s'} · ${fmtH(sum(list,v=>v.s))}</span></h2>
   <div class="legend" style="margin:0 0 10px">${CH.map((c,i)=>counts[i]?`<span class="chip" style="--c:${c.c}">${esc(c.n)} ${counts[i]}</span>`:'').join('')||'<span class="sub">No uploads this month.</span>'}</div>
-  <div class="cal">${cells}</div></div><div id="dayd"></div>`;
- const detail=()=>{const a=days[cal.sel]||[];$('#dayd').innerHTML=cal.sel&&a.length?`<div class="card"><h3>${MN[m]} ${cal.sel}, ${y}</h3><div class="list">${a.map(v=>`<div class="item"><span class="d">${v.tm}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span></div>`).join('')}</div></div>`:''};
+  <div id="dayd"></div>
+  <div class="cal">${cells}</div></div>`;
+ const detail=()=>{const a=days[cal.sel]||[];$('#dayd').innerHTML=cal.sel?`<div class="note" style="margin-bottom:12px"><b>${WD[(off+cal.sel-1)%7]}, ${MN[m]} ${cal.sel}, ${y}</b>${a.length?`<div class="list">${a.map(v=>`<div class="item"><span class="d">${v.tm}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span></div>`).join('')}</div>`:'<div class="sub">No uploads on this day.</div>'}</div>`:''};
  detail();
  app.querySelectorAll('.day:not(.out)').forEach(el=>el.onclick=e=>{if(e.target.closest('a'))return;const d=+el.dataset.d;cal.sel=cal.sel===d?null:d;app.querySelectorAll('.day').forEach(x=>x.classList.toggle('sel',+x.dataset.d===cal.sel));detail()});
  $('#pv').onclick=()=>go(mk-1);$('#nx').onclick=()=>go(mk+1);$('#lt').onclick=()=>go(MK1);
@@ -288,7 +332,7 @@ views.history=()=>{
  for(const v of hv){const k=v.y*12+v.m-1;const g=grid[k]||(grid[k]={n:0,s:0});g.n++;g.s+=v.s}
  const val=k=>{const g=grid[k];return g?(hist.metric==='v'?g.n:g.s/3600):0};
  for(const k in grid)mx=Math.max(mx,val(+k));
- const cell=(k)=>{const x=val(k);if(!x)return `<td class="h" data-k="${k}">·</td>`;const t=x/mx;return `<td class="h" data-k="${k}" style="background:rgba(var(--acc-rgb),${(.1+.9*t).toFixed(2)});color:${t>.55?'#fff':'inherit'}" title="${MN[k%12]} ${Math.floor(k/12)}: ${hist.metric==='v'?x+' videos':x.toFixed(1)+' hours'}">${hist.metric==='v'?x:Math.round(x)}</td>`};
+ const cell=(k)=>{const x=val(k);if(!x)return `<td class="h" data-k="${k}">·</td>`;const t=x/mx;return `<td class="h" data-k="${k}" style="background:rgba(var(--acc-rgb),${(.1+.9*t).toFixed(2)});color:${t>.55?'#fff':'inherit'}" title="${MN[k%12]} ${Math.floor(k/12)}: ${hist.metric==='v'?x+' videos':fmtH(x*3600)}">${hist.metric==='v'?x:Math.round(x)}</td>`};
  const rowTot=y=>{let t=0;for(let m=0;m<12;m++)t+=val(y*12+m);return t};
  const colTot=m=>{let t=0;for(const y of years)t+=val(y*12+m);return t};
  const heat=`<table class="heat"><tr><th>Year</th>${MS.map(m=>`<th>${m}</th>`).join('')}<th>Total</th></tr>
@@ -310,19 +354,19 @@ views.history=()=>{
  const mlab=k=>`${MS[k%12]} ${Math.floor(k/12)}`;
  app.innerHTML=`
  <div class="card"><h2>Upload heatmap</h2>
-  <div class="controls">${chSel('hc',hist.ch)}<select id="hm"><option value="v"${hist.metric==='v'?' selected':''}>Videos per month</option><option value="h"${hist.metric==='h'?' selected':''}>Hours per month</option></select><span class="sub">Click any month to open it in the calendar.</span></div>
+  <div class="controls">${chSel('hc',hist.ch)}<select id="hm"><option value="v"${hist.metric==='v'?' selected':''}>Videos per month</option><option value="h"${hist.metric==='h'?' selected':''}>Hours per month</option></select><span class="sub">Click any month to open it in the calendar (hours are rounded).</span></div>
   <div class="scroll">${heat}</div></div>
  <div class="card"><h2>Year view</h2><div class="controls"><select id="hy">${years.map(y=>`<option${y===hist.year?' selected':''}>${y}</option>`).join('')}</select>
   <span class="sub">${yv.length} videos · ${fmtH(sum(yv,v=>v.s))}</span></div>
   ${stacked({cats:MS,series:ys,label:'Videos per month in '+hist.year})}${legend()}</div>
  <div class="card"><h2>Uploads per year</h2>${stacked({cats:years.map(String),series:ay,label:'Videos per year'})}${legend()}
-  <div class="scroll"><table style="margin-top:10px"><tr><th>Year</th>${CH.map(c=>`<th>${esc(c.n)}</th>`).join('')}<th>Total</th><th>Hours</th></tr>
-  ${years.map((y,i)=>`<tr><td><b>${y}</b></td>${CH.map((_,ci)=>`<td>${ay[ci].vals[i]||'·'}</td>`).join('')}<td><b>${CH.reduce((a,_,ci)=>a+ay[ci].vals[i],0)}</b></td><td>${(sum(V.filter(v=>v.y===y),v=>v.s)/3600).toFixed(1)}</td></tr>`).join('')}</table></div></div>
+  <div class="scroll"><table style="margin-top:10px"><tr><th>Year</th>${CH.map(c=>`<th>${esc(c.n)}</th>`).join('')}<th>Total</th><th>Runtime</th></tr>
+  ${years.map((y,i)=>`<tr><td><b>${y}</b></td>${CH.map((_,ci)=>`<td>${ay[ci].vals[i]||'·'}</td>`).join('')}<td><b>${CH.reduce((a,_,ci)=>a+ay[ci].vals[i],0)}</b></td><td>${fmtH(sum(V.filter(v=>v.y===y),v=>v.s))}</td></tr>`).join('')}</table></div></div>
  <div class="card"><h2>Month-by-month timeline</h2>${stacked({cats:mks.map(mlab),labels:mks.map(k=>k%12===0?String(Math.floor(k/12)):''),series:tl,h:260,label:'Videos per month'})}${legend()}
   <div class="two" style="margin-top:12px"><div><h3>Busiest months</h3>${top.map(([k,n])=>`<span class="pill">${mlab(k)}: <b>${n}</b></span>`).join('')}</div>
   <div><h3>Longest quiet stretches (no uploads)</h3>${gl.length?gl.map(([a,b])=>`<span class="pill">${mlab(a)}${b>a?' - '+mlab(b):''} <b>(${b-a+1} mo)</b></span>`).join(''):'<span class="sub">None - there was an upload every month.</span>'}</div></div></div>`;
  $('#hc').onchange=e=>{hist.ch=+e.target.value;views.history()};$('#hm').onchange=e=>{hist.metric=e.target.value;views.history()};$('#hy').onchange=e=>{hist.year=+e.target.value;views.history()};
- app.querySelectorAll('td.h').forEach(td=>td.onclick=()=>{const k=+td.dataset.k;if(k<MK0||k>MK1)return;cal.ch=hist.ch;cal.sel=null;location.hash=`#calendar/${Math.floor(k/12)}-${p2(k%12+1)}`});
+ app.querySelectorAll('td.h').forEach(td=>td.onclick=()=>{const k=+td.dataset.k;if(k<MK0||k>MK1)return;cal.ch=hist.ch;cal.sel=null;window._top=true;location.hash=`#calendar/${Math.floor(k/12)}-${p2(k%12+1)}`});
 };
 
 /* Stats */
@@ -330,7 +374,7 @@ views.stats=()=>{
  const prof=(a,name,col)=>{
   const n=a.length,first=a[0],last=a[n-1],span=(last.day-first.day),secs=a.map(v=>v.s),pos=secs.filter(x=>x>0);
   const yc={};a.forEach(v=>yc[v.y]=(yc[v.y]||0)+1);const by=Object.entries(yc).sort((x,y)=>y[1]-x[1])[0];
-  const mv=a.reduce((x,v)=>v.v>x.v?v:x,a[0]),lg=a.reduce((x,v)=>v.s>x.s?v:x,a[0]);
+  const mv=a.reduce((x,v)=>v.v>x.v?v:x,a[0]);
   return `<tr><td class="l">${col?`<span class="chip" style="--c:${col}">${esc(name)}</span>`:`<b>${esc(name)}</b>`}</td><td>${fmtN(n)}</td><td>${first.d}</td><td>${last.d}</td>
   <td>${(span/365.25).toFixed(1)}</td><td>${(n/Math.max(1,span/30.4375)).toFixed(1)}</td><td>${n>1?(span/(n-1)).toFixed(1):'-'}</td><td>${by[0]} (${by[1]})</td>
   <td>${fmtH(sum(a,v=>v.s))}</td><td>${dur(Math.round(sum(a,v=>v.s)/n))}</td><td>${dur(Math.round(median(secs)))}</td><td>${dur(Math.max(...secs))}</td><td>${pos.length?dur(Math.min(...pos)):'-'}</td>
@@ -341,17 +385,47 @@ views.stats=()=>{
  const hr=seriesBy(hrs,(ci,h)=>V.filter(v=>v.c===ci&&v.hr===h).length);
  const B=[['<5m',0,300],['5-10m',300,600],['10-20m',600,1200],['20-40m',1200,2400],['40-60m',2400,3600],['1-2h',3600,7200],['2h+',7200,1e9]];
  const ln=seriesBy(B,(ci,b)=>V.filter(v=>v.c===ci&&v.s>=b[1]&&v.s<b[2]).length);
- const lg=V.reduce((x,v)=>v.s>x.s?v:x,V[0]),mv=V.reduce((x,v)=>v.v>x.v?v:x,V[0]),pos=V.filter(v=>v.s>0),sh=pos.reduce((x,v)=>v.s<x.s?v:x,pos[0]);
- const top10=[...V].sort((a,b)=>b.v-a.v).slice(0,10);
+ const lg=V.reduce((x,v)=>v.s>x.s?v:x,V[0]),mv=V.reduce((x,v)=>v.v>x.v?v:x,V[0]),sh=V.reduce((x,v)=>v.s<x.s?v:x,V[0]);
+ const top=[...V].sort((a,b)=>b.v-a.v).slice(0,15);
+ /* extra records */
+ const dc={};V.forEach(v=>dc[v.d]=(dc[v.d]||0)+1);
+ const bd=Object.entries(dc).sort((a,b)=>b[1]-a[1])[0];
+ const bm=[...byMonth.entries()].sort((a,b)=>b[1].length-a[1].length)[0];
+ const yc2={};V.forEach(v=>yc2[v.y]=(yc2[v.y]||0)+1);const by2=Object.entries(yc2).sort((a,b)=>b[1]-a[1])[0];
+ const ud=[...new Set(V.map(v=>v.day))].sort((a,b)=>a-b);
+ let best=[ud[0],ud[0],1],cur=[ud[0],ud[0],1],gap=[ud[0],ud[0],0];
+ for(let i=1;i<ud.length;i++){
+  if(ud[i]-ud[i-1]===1){cur[1]=ud[i];cur[2]++}else cur=[ud[i],ud[i],1];
+  if(cur[2]>best[2])best=[...cur];
+  const g=ud[i]-ud[i-1]-1;if(g>gap[2])gap=[ud[i-1],ud[i],g];
+ }
+ const dayStr=n=>{const d=new Date(n*864e5);return `${MS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`};
+ const rec=(l,h)=>`<div class="rec"><span class="sub">${l}</span><span>${h}</span></div>`;
+ const bdv=V.find(v=>v.d===bd[0]);
  app.innerHTML=`
- <div class="card"><h2>Upload profile by channel</h2><div class="scroll"><table><tr><th>Channel</th><th>Videos</th><th>First upload</th><th>Latest upload</th><th>Active span (yrs)</th><th>Videos / month</th><th>Avg days between</th><th>Busiest year</th><th>Total runtime</th><th>Avg length</th><th>Median length</th><th>Longest</th><th>Shortest (&gt;0)</th><th>Total views</th><th>Avg views</th><th>Most viewed</th></tr>${rows}</table></div>
-  <p class="sub">Views accumulate with age, so older videos are not directly comparable to recent ones. "Videos / month" is averaged over each channel's active span.</p></div>
+ <div class="card"><h2>Upload profile by channel</h2><div class="scroll"><table><tr><th>Channel</th><th>Videos</th><th>First upload</th><th>Latest upload</th><th>Active span (yrs)</th><th>Videos / month</th><th>Avg days between</th><th>Busiest year</th><th>Total runtime</th><th>Avg length</th><th>Median length</th><th>Longest</th><th>Shortest</th><th>Total views</th><th>Avg views</th><th>Most viewed</th></tr>${rows}</table></div>
+  <p class="sub">Views accumulate with age, so older videos are not directly comparable to recent ones. "Videos / month" is averaged over each channel's active span. The channel column stays put as you scroll sideways.</p></div>
+ <div class="two" style="align-items:start">
+  <div>
+   <div class="card"><h3>Records</h3>
+    ${rec('⏱ Longest video',`${link(lg)} <span class="sub">(${dur(lg.s)})</span>`)}
+    ${rec('⚡ Shortest video',`${link(sh)} <span class="sub">(${dur(sh.s)})</span>`)}
+    ${rec('👁 Most viewed',`${link(mv)} <span class="sub">(${fmtN(mv.v)} views)</span>`)}
+    ${rec('📅 Most uploads in one day',`${bd[1]} videos on <a class="dl" href="#calendar/${bd[0]}">${dstr(bdv)}</a>`)}
+    ${rec('🗓 Busiest month',`${MN[bm[0]%12]} ${Math.floor(bm[0]/12)} <span class="sub">(${bm[1].length} videos)</span>`)}
+    ${rec('📈 Busiest year',`${by2[0]} <span class="sub">(${by2[1]} videos)</span>`)}
+    ${rec('🔥 Longest upload streak',`${best[2]} days in a row <span class="sub">(${dayStr(best[0])} - ${dayStr(best[1])})</span>`)}
+    ${rec('😴 Longest break',`${gap[2]} days without an upload <span class="sub">(${dayStr(gap[0])} - ${dayStr(gap[1])})</span>`)}
+    ${rec('⌛ Average video length',`${dur(Math.round(sum(V,v=>v.s)/V.length))} <span class="sub">(median ${dur(Math.round(median(V.map(v=>v.s))))})</span>`)}
+    ${rec('🎞 Total runtime',`${fmtH(sum(V,v=>v.s))} <span class="sub">(about ${fmtN(sum(V,v=>v.s)/86400)} days of video)</span>`)}
+    ${rec('👥 Total views',`${fmtN(sum(V,v=>v.v))}`)}
+   </div>
+   <div class="card"><h3>Uploads by weekday</h3>${stacked({cats:WD,series:wd,h:210,label:'Videos by weekday'})}${legend()}</div>
+  </div>
+  <div class="card"><h3>Top 15 most viewed</h3><div class="list">${top.map((v,i)=>`<div class="item"><span class="d">#${i+1}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${fmtN(v.v)}</span></div>`).join('')}</div></div></div>
  <div class="two">
-  <div class="card"><h3>Records</h3><p>⏱ Longest: ${link(lg)} <span class="sub">(${dur(lg.s)})</span></p><p>⚡ Shortest: ${link(sh)} <span class="sub">(${dur(sh.s)})</span></p><p>👁 Most viewed: ${link(mv)} <span class="sub">(${fmtN(mv.v)} views)</span></p></div>
-  <div class="card"><h3>Top 10 most viewed</h3><div class="list">${top10.map((v,i)=>`<div class="item"><span class="d">#${i+1}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${fmtN(v.v)}</span></div>`).join('')}</div></div></div>
- <div class="card"><h3>Uploads by weekday</h3>${stacked({cats:WD,series:wd,h:200,label:'Videos by weekday'})}${legend()}</div>
- <div class="card"><h3>Uploads by hour of day (US Eastern)</h3>${stacked({cats:hrs.map(h=>`${h}:00`),labels:hrs.map(h=>h%3===0?String(h):''),series:hr,h:200,label:'Videos by hour'})}${legend()}</div>
- <div class="card"><h3>Video length distribution</h3>${stacked({cats:B.map(b=>b[0]),series:ln,h:200,label:'Videos by length'})}${legend()}</div>`;
+  <div class="card"><h3>Uploads by hour of day (US Eastern)</h3>${stacked({cats:hrs.map(h=>`${h}:00`),labels:hrs.map(h=>h%3===0?String(h):''),series:hr,h:210,label:'Videos by hour'})}${legend()}</div>
+  <div class="card"><h3>Video length distribution</h3>${stacked({cats:B.map(b=>b[0]),series:ln,h:210,label:'Videos by length'})}${legend()}</div></div>`;
 };
 
 /* Excel tracker */
@@ -363,18 +437,29 @@ views.tracker=()=>{
   <div class="note"><b>Why not track watched videos right here?</b> A website can only save your progress inside your browser, and browsers can erase that without warning - clearing history, private windows, storage cleanup, or switching devices. Losing hours of ticking boxes would be awful, so the tracking lives in a file that you control and can back up.</div></div>
  <div class="two">
   <div class="card"><h3>What's inside</h3><ul>
-   <li><b>Library</b> - all ${fmtN(V.length)} videos with a clickable ▶ link, filters and search.</li>
+   <li><b>Library</b> - all ${fmtN(V.length)} videos with a clickable ▶ link, filters and search (descriptions included).</li>
    <li><b>Mark</b> column - Watched / Unwatched / Watch Later / Skipped, plus a <b>Watched On</b> date and <b>Notes</b>.</li>
-   <li><b>Dashboard</b> - % watched, hours watched and remaining, per-channel progress, "up next".</li>
+   <li><b>Dashboard</b> - % watched, time watched and remaining, per-channel progress, "up next".</li>
    <li><b>Queue</b> - your next 30 videos to watch, by channel, oldest or newest first.</li>
    <li><b>Calendar, History, Stats</b> - the same exploration tools as this site, plus your watching pace.</li>
-   <li><b>Watched Through</b> - on the Channels sheet, set a date and everything before it counts as watched. Great for catching up.</li></ul></div>
+   <li><b>Watched Through</b> - on the Channels sheet, set a date and everything on or before it counts as watched. Great for catching up.</li></ul></div>
   <div class="card"><h3>How to use it</h3><ol class="steps">
    <li>Download the file and open it in Excel 2019 or Microsoft 365 (desktop). Click <b>Enable Editing</b>.</li>
-   <li>Go to <b>Library</b>, pick a value in the <b>Mark</b> column for videos you've seen.</li>
+   <li>Go to <b>Library</b> and pick a value in the <b>Mark</b> column for videos you've seen.</li>
    <li>Or set <b>Watched Through</b> for a channel on the <b>Channels</b> sheet to mark a whole stretch at once.</li>
    <li>Watch your Dashboard fill in. <b>Save a backup copy</b> now and then.</li></ol>
-   <p class="sub">The workbook is a snapshot from ${esc(D.generated)}. It doesn't update itself; newer videos will be in a fresh download from this page, but your marks won't carry over automatically.</p></div></div>`;
+   <p class="sub">The workbook is a snapshot from ${esc(D.generated)}. It doesn't update itself.</p></div></div>
+ <div class="card"><h2>Getting the latest videos into your Excel file</h2>
+  <p>This site refreshes every week, but your downloaded workbook stays frozen. You might think you can paste the newest rows onto the bottom of your Library, but it's a little more than that: the calendar, the year and month lists, the history tables, the "up next" lists and every video's view count are all worked out when the file is built, and the formula columns don't fill themselves in on pasted rows. Pasting by hand leaves those out of date.</p>
+  <p>The reliable way is to <b>download the newest file and carry your marks across</b>. The new file has a built-in <b>Carry Over</b> sheet that does the matching for you (by each video's unique ID, so nothing gets mixed up). About a minute:</p>
+  <ol class="steps">
+   <li><b>Download</b> the newest workbook from the button above. Keep your old one open too.</li>
+   <li>In your <b>old</b> workbook, open the <b>Library</b> sheet, click the small square at the very top-left corner (it selects everything), and press <b>Ctrl+C</b>.</li>
+   <li>In the <b>new</b> workbook, open the <b>Carry Over</b> sheet, click cell <b>A1</b>, then <b>Paste Special &rarr; Values</b>. The title at the top should now say how many videos matched.</li>
+   <li>On Carry Over, select columns <b>Z:AA</b> (Mark and Watched On) from row 6 down and copy. Go to <b>Library</b>, click cell <b>C6</b>, and <b>Paste Special &rarr; Values</b>. (Clear any filters on Library first.)</li>
+   <li>Do the same for column <b>AB</b> (Notes), pasting into Library cell <b>L6</b>.</li>
+   <li>On the <b>Channels</b> sheet, re-enter your <b>Watched Through</b> dates (they're only a few cells). Then you can delete the Carry Over sheet.</li></ol>
+  <p class="sub">Tips: this works when both files came from this site (same column layout). Keep the old file as a backup until you've spot-checked a few videos. Videos that YouTube has since removed won't appear in the new file, so any marks on them simply drop away.</p></div>`;
 };
 
 /* ---------- router ---------- */
@@ -383,9 +468,10 @@ function route(){
  const tab=views[t]?t:'overview';
  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.t===tab));
  views[tab](arg);
- if(!arg||tab!=='calendar')window.scrollTo(0,0);
+ if(tab!=='calendar'||window._top){window.scrollTo(0,0);window._top=false}
 }
 window.addEventListener('hashchange',route);
+document.addEventListener('click',e=>{if(e.target.closest('a.dl'))window._top=true});
 document.addEventListener('keydown',e=>{if(!location.hash.startsWith('#calendar')||/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))return;
  if(e.key==='ArrowLeft'){const b=$('#pv');b&&!b.disabled&&b.click()}if(e.key==='ArrowRight'){const b=$('#nx');b&&!b.disabled&&b.click()}});
 $('#gen').textContent=D.generated;

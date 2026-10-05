@@ -8,10 +8,11 @@ Produces:
   site/index.html                      single self-contained page (data embedded)
   site/SCB_Library_Fan_Edition.xlsx    the Excel tracker, with NO personal data
 
-Personal data (Mark, Watched On, Notes, Watched Through, descriptions) is stripped, and videos
+Personal data (Mark, Watched On, Notes, Watched Through) is stripped; descriptions are kept in a
+cleaned, shortened form (URLs and repeated sponsor text removed) so they can be searched. Videos
 that are no longer on YouTube (or not yet public) are left out.
 """
-import argparse, json, shutil, sys
+import argparse, collections, json, re, shutil, sys
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,23 @@ import scb_library as S
 
 HERE = Path(__file__).resolve().parent
 XLSX_NAME = "SCB_Library_Fan_Edition.xlsx"
+
+
+DESC_MAX = 1200          # characters kept per description
+BOILERPLATE_MIN = 25     # a line repeated in at least this many descriptions is treated as boilerplate
+
+
+def _lines(text):
+    return [re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", ln)).strip() for ln in (text or "").splitlines()]
+
+
+def clean_descriptions(vids):
+    """Strip URLs and sponsor/social boilerplate; keep a searchable summary of each description."""
+    count = collections.Counter(ln for v in vids for ln in set(_lines(v.get("description"))) if len(ln) > 3)
+    common = {ln for ln, c in count.items() if c >= BOILERPLATE_MIN}
+    for v in vids:
+        keep = [ln for ln in _lines(v.get("description")) if ln and ln not in common]
+        v["description"] = " ".join(keep)[:DESC_MAX]
 
 
 def main():
@@ -42,8 +60,9 @@ def main():
         if v.get("availability") in ("Not in last refresh", "Upcoming/Live"):
             continue
         v = dict(v)
-        v.update(mark=None, watched_on=None, notes=None, description="", first_seen=None)
+        v.update(mark=None, watched_on=None, notes=None, first_seen=None)
         vids.append(v)
+    clean_descriptions(vids)
     vids = S.finalize(vids, channels, tz)
     # drop channels with no videos
     used = {v["channel_id"] for v in vids}
@@ -51,7 +70,7 @@ def main():
     cidx = {c["id"]: i for i, c in enumerate(channels)}
 
     rows = [[v.get("video_id") or "", v["title"], cidx[v["channel_id"]], v["local"].strftime("%Y-%m-%d"),
-             v["local"].strftime("%H:%M"), v["seconds"], v.get("views") or 0] for v in vids if v["channel_id"] in cidx]
+             v["local"].strftime("%H:%M"), v["seconds"], v.get("views") or 0, v.get("description") or ""] for v in vids if v["channel_id"] in cidx]
     payload = dict(
         generated=now.strftime("%B %-d, %Y") if sys.platform != "win32" else now.strftime("%B %#d, %Y"),
         tz=tzname,

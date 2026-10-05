@@ -20,6 +20,12 @@ GitHub pauses scheduled runs after 60 days with no repo activity - if that happe
 Your private `SCB_Library.xlsx` (with your watch marks) stays on your computer and is untouched. The website build starts
 from scratch on GitHub's servers each time, so none of your personal data can reach the site.
 
+## What the site includes
+Overview, Library (search titles **and** descriptions as two separate lists; click any date to open it in the calendar),
+Calendar (Sunday-first, prev/next), History, Stats, and an Excel-tracker page with download + update instructions.
+Zero-length (0:00) placeholder videos are left out. Descriptions are shortened and de-duplicated (URLs and sponsor
+boilerplate removed) so they can be searched without bloating the page.
+
 ## Files
 - `site_template.html` - the page (edit this to change the look); `build_site.py` - injects data, builds the Excel download
 - `scb_library.py` - the same engine as your desktop updater
