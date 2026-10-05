@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Build the public fan website from a library workbook.
 
