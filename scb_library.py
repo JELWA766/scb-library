@@ -27,6 +27,19 @@ from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
+try:
+    import events_data as EV
+except ImportError:                      # events_data.py sits next to this script; calendar events are skipped without it
+    EV = None
+CATS = EV.CATEGORIES if EV else [("Other", "📌", "5C6B7A")]
+EVENT_TEMPLATES = [
+    dict(date=None, title="J & Beth's wedding anniversary ({n} years)", cat="Carlin life", repeat="Yes", show="Yes",
+         notes="Fill in the wedding date and it will show every year"),
+    dict(date=None, title="Ben & Alyce's wedding anniversary ({n} years)", cat="Carlin life", repeat="Yes", show="Yes",
+         notes="Fill in the wedding date and it will show every year"),
+    dict(date=None, title="My own event - replace this row", cat="Other", repeat="No", show="Yes", notes="Add a web address here to make it clickable"),
+]
+
 HERE = Path(__file__).resolve().parent
 WORKBOOK = HERE / "SCB_Library.xlsx"
 BACKUPS = HERE / "backups"
@@ -110,7 +123,7 @@ def title_block(ws, title, subtitle=None, width_to="M"):
 
 
 def nav(ws, ref, sheet, label, anchor="A1"):
-    f(ws, ref, f'=HYPERLINK("#{sheet}!{anchor}","{label}")', font=fnt(9, True, TEAL, underline="single"))
+    f(ws, ref, f'=HYPERLINK("#\'{sheet}\'!{anchor}","{label}")', font=fnt(9, True, TEAL, underline="single"))
 
 
 def section(ws, row, label, c1="B", c2="M"):
@@ -133,7 +146,7 @@ def protect(ws):
 # ----------------------------------------------------------------------------- library schema
 LIB = ["Open", "Status", "Mark", "Watched On", "Published", "Channel", "Title", "Length", "Views",
        "Likes", "Comments", "Notes", "Video ID", "Channel ID", "Published UTC", "Day", "Seq",
-       "Availability", "First Seen", "Last Seen", "Description", "Cal Key", "Queue Key"]
+       "Availability", "First Seen", "Last Seen", "Description", "Cal Key", "Queue Key", "Catch Key"]
 LC = {n: CL(i + 1) for i, n in enumerate(LIB)}
 HDR = 5
 MARKS = ["Watched", "Unwatched", "Watch Later", "Skipped"]
@@ -315,7 +328,8 @@ def find_header(ws, must, rows=15):
     return None, None
 
 
-SELECTORS = {"Calendar": ["C4", "E4", "G4"], "Queue": ["C4", "D4", "E4"], "History": ["C4", "G4", "K4"]}
+SELECTORS = {"Calendar": ["C4", "E4", "G4", "H4"], "Queue": ["C4", "D4", "E4"], "History": ["C4", "G4", "K4"],
+             "Catch-Up": ["C7", "D7", "C8", "C9"] + [f"C{r}" for r in range(28, 36)], "Daily Plan": ["D4", "E4"]}
 
 
 def length_to_seconds(x):
@@ -333,7 +347,7 @@ def length_to_seconds(x):
 
 def read_workbook(path):
     wb = load_workbook(path)
-    out = dict(settings={}, channels=[], videos=[], selectors={})
+    out = dict(settings={}, channels=[], videos=[], selectors={}, events_mine=[], events_show={}, has_events=False)
     if "Settings" in wb.sheetnames:
         out["settings"]["tz"] = wb["Settings"]["C4"].value
     for sh, cells in SELECTORS.items():
@@ -351,7 +365,23 @@ def read_workbook(path):
                 out["channels"].append(dict(
                     name=g("Display Name"), handle=g("Handle or URL"), id=g("Channel ID"),
                     enabled=str(g("Enabled") or "Yes").strip().lower() not in ("no", "n", "false", "0"),
-                    through=g("Watched Through"), yt=g("YouTube Title"), refreshed=g("Last Refresh")))
+                    through=g("Watched Through"), yt=g("YouTube Title"), refreshed=g("Last Refresh"),
+                    catchup=g("In Catch Up")))
+    if "Events" in wb.sheetnames:
+        ws = wb["Events"]
+        hr, cols = find_header(ws, ["Event", "Category"])
+        if hr:
+            out["has_events"] = True
+            for r in range(hr + 1, ws.max_row + 1):
+                g = lambda n: ws.cell(row=r, column=cols[n]).value if n in cols else None
+                title = g("Event")
+                if not title and not g("Date"):
+                    continue
+                if str(g("Source") or "").strip() == "Built-in":
+                    out["events_show"][g("Key")] = str(g("Show") or "Yes")
+                else:
+                    out["events_mine"].append(dict(date=g("Date"), end=g("End Date"), title=title or "", cat=g("Category") or "Other",
+                                                   repeat=g("Repeats Yearly"), notes=g("Notes / Link") or "", show=g("Show") or "Yes"))
     if "Library" in wb.sheetnames:
         ws = wb["Library"]
         hr, cols = find_header(ws, ["Title", "Video ID"])
@@ -473,7 +503,7 @@ def finalize(videos, channels, tz):
 
 
 # ----------------------------------------------------------------------------- BUILD
-def build(path, videos, channels, tzname, selectors, now, fan=False):
+def build(path, videos, channels, tzname, selectors, now, fan=False, events=None, events_mine=None, events_show=None):
     wb = Workbook()
     wb.calculation.fullCalcOnLoad = True
     n = len(channels)
@@ -481,15 +511,17 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     colors = [PALETTE[i % len(PALETTE)] for i in range(n)]
     cidx = {c["id"]: i for i, c in enumerate(channels)}
 
-    names = ["Dashboard", "Library", "Queue", "Calendar", "History", "Stats", "Channels"] + \
-            (["Carry Over"] if fan else []) + ["Settings", "Lists"]
+    names = ["Dashboard", "Library", "Queue"] + ([] if fan else ["Catch-Up", "Daily Plan"]) + ["Calendar", "Events", "History", "Stats", "Channels"] + \
+            (["Carry Over"] if fan else []) + ["Settings", "Lists", "EventGrid"]
     ws_d = wb.active; ws_d.title = "Dashboard"
     W = {nm: (ws_d if nm == "Dashboard" else wb.create_sheet(nm)) for nm in names}
     tabs = dict(Dashboard=NAVY, Library=TEAL, Queue=TEAL, Calendar="2E9E6B", History="2E9E6B", Stats="2E9E6B",
-                Channels=GOLD, Settings=GOLD)
+                Channels=GOLD, Settings=GOLD, Events="8E5BB5", **{"Catch-Up": "C9A227", "Daily Plan": "C9A227"})
     for k, c in tabs.items():
-        W[k].sheet_properties.tabColor = c
+        if k in W:
+            W[k].sheet_properties.tabColor = c
     W["Lists"].sheet_state = "hidden"
+    W["EventGrid"].sheet_state = "hidden"
 
     years = list(range(videos[0]["local"].year, videos[-1]["local"].year + 1)) if videos else [now.year]
     MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
@@ -497,14 +529,18 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
 
     # ---------------- Lists
     L = W["Lists"]
-    for i, y in enumerate(years, 1):
+    ylist = list(range(years[0], max(years[-1], now.year) + 2))      # calendar can browse a year into the future (upcoming releases)
+    for i, y in enumerate(ylist, 1):
         L.cell(row=i, column=1, value=y)
     for i, m in enumerate(MONTHS, 1):
         L.cell(row=i, column=3, value=m)
+    for i, (cn, em, cc) in enumerate(CATS, 1):
+        L.cell(row=i, column=7, value=cn)
+        L.cell(row=i, column=8, value=em)
     L["E1"] = "All channels"
     for i in range(n):
         L.cell(row=i + 2, column=5, value=f'=IF(Channels!$C${CH_HDR + 1 + i}="","",Channels!$C${CH_HDR + 1 + i})')
-    wb.defined_names["YearList"] = DefinedName("YearList", attr_text=f"Lists!$A$1:$A${len(years)}")
+    wb.defined_names["YearList"] = DefinedName("YearList", attr_text=f"Lists!$A$1:$A${len(ylist)}")
     wb.defined_names["MonthList"] = DefinedName("MonthList", attr_text="Lists!$C$1:$C$12")
     wb.defined_names["ChannelList"] = DefinedName(
         "ChannelList", attr_text='OFFSET(Lists!$E$1,0,0,COUNTIF(Lists!$E$1:$E$40,"?*"),1)')
@@ -542,7 +578,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
                                  "Set 'Watched Through' to treat everything up to that date as already watched.")
     nav(ws, "B4", "Dashboard", "◄ Dashboard")
     cols = ["Color", "Enabled", "Display Name", "Handle or URL", "Channel ID", "Watched Through", "YouTube Title",
-            "Videos", "Watched", "Backlog", "Latest Upload", "Last Refresh"]
+            "Videos", "Watched", "Backlog", "Latest Upload", "Last Refresh"] + ([] if fan else ["In Catch Up"])
     head(ws, CH_HDR, 1, cols)
     for i, c in enumerate(channels):
         r = CH_HDR + 1 + i
@@ -559,12 +595,18 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
           fmt="#,##0", al=CENTER, border=BOX)
         f(ws, f"K{r}", f'=IF(H{r}=0,"",_xlfn.MAXIFS({V("Day")},{V("Channel ID")},E{r}))', fmt="yyyy-mm-dd", al=CENTER, border=BOX)
         put(ws, f"L{r}", c.get("refreshed"), fmt="yyyy-mm-dd hh:mm", font=fnt(9, color="6B7385"), al=CENTER, border=BOX)
+        if not fan:
+            put(ws, f"M{r}", "No" if str(c.get("catchup") or "Yes").strip().lower() in ("no", "n", "false", "0") else "Yes",
+                fl="FFF8E1", al=CENTER, border=BOX, unlock=True)
     last_ch = CH_HDR + max(n, 1)
-    t = Table(displayName="tblChannels", ref=f"A{CH_HDR}:L{last_ch}")
+    t = Table(displayName="tblChannels", ref=f"A{CH_HDR}:{'L' if fan else 'M'}{last_ch}")
     t.tableStyleInfo = TableStyleInfo(name="TableStyleLight1", showRowStripes=False)
     ws.add_table(t)
-    for col, w in zip("ABCDEFGHIJKL", [7, 9, 28, 44, 28, 17, 26, 10, 10, 10, 15, 18]):
+    for col, w in zip("ABCDEFGHIJKLM", [7, 9, 28, 44, 28, 17, 26, 10, 10, 10, 15, 18, 13]):
         ws.column_dimensions[col].width = w
+    if not fan:
+        dv3 = DataValidation(type="list", formula1='"Yes,No"', allow_blank=True)
+        ws.add_data_validation(dv3); dv3.add(f"M{CH_HDR + 1}:M{CH_HDR + 40}")
     dv = DataValidation(type="list", formula1='"Yes,No"', allow_blank=True)
     ws.add_data_validation(dv); dv.add(f"B{CH_HDR + 1}:B{CH_HDR + 40}")
     dv2 = DataValidation(type="date", operator="greaterThan", formula1="36526", allow_blank=True,
@@ -579,7 +621,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         "• Handle or URL / Channel ID - give either. If Channel ID is blank, the updater looks it up for you.",
         "• Watched Through - handy for catching up: every video on or before this date counts as Watched (unless you override it in Library > Mark).",
         "• YouTube Title - the channel's real name on YouTube, filled by the updater so you can confirm the right channel was matched.",
-        "• Colors follow row order. Please don't sort this table by hand."]):
+        "• Colors follow row order. Please don't sort this table by hand.",
+        *([] if fan else ["• In Catch Up - 'No' leaves a channel out of the Catch-Up planner and Daily Plan (backlog, upload rate and video lists)."])]):
         put(ws, f"A{r0 + i}", line, font=fnt(10, i == 0, NAVY if i == 0 else "444444"))
 
     # =============================================================== LIBRARY
@@ -591,7 +634,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     nav(ws, "A3", "Dashboard", "◄ Dashboard")
     kind = {}
     for nm in LIB:
-        kind[nm] = "user" if nm in ("Mark", "Watched On", "Notes") else ("calc" if nm in ("Open", "Status", "Cal Key", "Queue Key") else "raw")
+        kind[nm] = "user" if nm in ("Mark", "Watched On", "Notes") else ("calc" if nm in ("Open", "Status", "Cal Key", "Queue Key", "Catch Key") else "raw")
     for i, nm in enumerate(LIB, 1):
         put(ws, f"{CL(i)}{HDR}", nm, font=fnt(9, True, "FFFFFF"),
             fl={"user": GOLD, "calc": TEAL, "raw": SLATE}[kind[nm]], al=CENTER, border=BOX)
@@ -629,13 +672,16 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         f(ws, f"V{r}", f'=IF(AND(P{r}>=Calendar!$K$2,P{r}<EDATE(Calendar!$K$2,1),OR(Calendar!$K$4="*",N{r}=Calendar!$K$4)),'
                        f'P{r}*100+COUNTIFS({ab("Day")},P{r},{ab("Seq")},"<="&Q{r},{ab("Channel ID")},Calendar!$K$4),"")', font=fnt(9, color="6B7385"))
         f(ws, f"W{r}", f'=IF(AND(B{r}=Queue!$C$4,OR(Queue!$K$4="*",N{r}=Queue!$K$4)),Q{r},"")', font=fnt(9, color="6B7385"))
+        if not fan:
+            f(ws, f"X{r}", f'=IF(AND(OR(B{r}="Unwatched",B{r}="Watch Later"),IFERROR(INDEX(tblChannels[In Catch Up],MATCH(N{r},tblChannels[Channel ID],0)),"Yes")<>"No"),'
+                           f'IF(AND(\'Daily Plan\'!$E$4="Watch Later first, then oldest",B{r}="Watch Later"),Q{r}-1000000,Q{r}),"")', font=fnt(9, color="6B7385"))
     t = Table(displayName="tblVideos", ref=f"A{HDR}:{CL(len(LIB))}{last}")
     t.tableStyleInfo = TableStyleInfo(name="TableStyleLight1", showRowStripes=True)
     ws.add_table(t)
-    for nm, w in zip(LIB, [7, 12, 13, 13, 21, 24, 70, 10, 11, 9, 10, 32, 13, 14, 17, 12, 7, 17, 12, 12, 60, 10, 10]):
+    for nm, w in zip(LIB, [7, 12, 13, 13, 21, 24, 70, 10, 11, 9, 10, 32, 13, 14, 17, 12, 7, 17, 12, 12, 60, 10, 10, 10]):
         ws.column_dimensions[LC[nm]].width = w
     ws.column_dimensions.group("M", "T", hidden=True)
-    ws.column_dimensions.group("V", "W", hidden=True)
+    ws.column_dimensions.group("V", "X", hidden=True)
     ws.freeze_panes = f"A{HDR + 1}"
     rng = lambda c: f"{LC[c]}{HDR + 1}:{LC[c]}{last}"
     dv = DataValidation(type="list", formula1='"' + ",".join(MARKS) + '"', allow_blank=True, showErrorMessage=True,
@@ -671,7 +717,10 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         ("   Catching up on a back catalogue: set 'Watched Through' for a channel on the Channels sheet instead of marking thousands of rows.", False),
         ("   'Skipped' videos (trailers, clips you'll never watch) are left out of the percentage calculations.", False),
         ("Queue - pick a channel / list / order to get the next 30 videos to watch, each with a link.", False),
+        *([] if fan else [("Catch-Up - enter how much you watch (per day, week or month) to see when you'll catch up, compare what-if paces, and see the backlog over time.", False),
+                          ("Daily Plan - the exact videos to watch today to break even, keep your pace, or hit a catch-up goal date. Choose which channels count with 'In Catch Up' on the Channels sheet.", False)]),
         ("Calendar - pick a year, month and channel to see that month's uploads on a Monday-first calendar. Click a title to open it.", False),
+        ("Events - holidays, fandom days, Disney/Pixar/Marvel/Star Wars/Harry Potter releases and trailers, game releases and Carlin milestones, shown on the Calendar. Add your own (multi-day and yearly-repeating supported) at the bottom of the Events sheet.", False),
         ("History - upload heatmap (year x month), year view, uploads per year and a month-by-month timeline with charts.", False),
         ("Stats - progress per channel, upload profile, watching-vs-uploading pace and records.", False),
         ("Sheets other than Library / Channels / Settings are protected (no password) so formulas aren't overwritten by accident: Review > Unprotect Sheet.", False),
@@ -964,7 +1013,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     put(ws, f"B{e}", "Estimated days to clear backlog", font=fnt(10, True), border=BOX)
     f(ws, f"C{e}", f'=IF(D{P0 + 3}/90-D{P0 + 1}/90<=0,"Backlog is growing",K{AT}/(D{P0 + 3}/90-D{P0 + 1}/90))', fmt="#,##0", al=CENTER, border=BOX)
     ws.merge_cells(f"C{e}:D{e}")
-    put(ws, f"F{e}", "Uses the last-90-day watch rate minus the upload rate.", font=fnt(8, color="6B7385", italic=True))
+    put(ws, f"F{e}", "Uses the last-90-day watch rate minus the upload rate." + ("" if fan else " See the Catch-Up sheet to explore."), font=fnt(8, color="6B7385", italic=True))
     put(ws, f"B{e + 1}", "* Counts only videos with a 'Watched On' date.", font=fnt(8, color="6B7385", italic=True))
 
     r = e + 4
@@ -996,10 +1045,11 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     f(ws, "B3", '=IF(Settings!$C$5="","","Last updated "&TEXT(Settings!$C$5,"d mmm yyyy h:mm AM/PM")&"   ·   "&TODAY()-INT(Settings!$C$5)&" day(s) ago")',
       font=fnt(9, False, "6B7385", italic=True))
     ws.conditional_formatting.add("B3", FormulaRule(formula=["TODAY()-INT(Settings!$C$5)>7"], font=Font(color="C0392B", bold=True, italic=True)))
-    for k, (sh, lab) in enumerate([("Library", "Library"), ("Queue", "Queue"), ("Calendar", "Calendar"), ("History", "History"),
-                                    ("Stats", "Stats"), ("Channels", "Channels"), ("Settings", "Settings")]):
+    navs = [("Library", "Library"), ("Queue", "Queue")] + ([] if fan else [("Catch-Up", "Catch-Up"), ("Daily Plan", "Daily Plan")]) + \
+           [("Calendar", "Calendar"), ("Events", "Events"), ("History", "History"), ("Stats", "Stats"), ("Channels", "Channels"), ("Settings", "Settings")]
+    for k, (sh, lab) in enumerate(navs):
         c = f"{CL(2 + k)}4"
-        f(ws, c, f'=HYPERLINK("#{sh}!A1","{lab}")', font=fnt(10, True, "FFFFFF", underline=None), fl=TEAL, al=CENTER)
+        f(ws, c, '=HYPERLINK("#\'' + sh + '\'!A1","' + lab + '")', font=fnt(10, True, "FFFFFF", underline=None), fl=TEAL, al=CENTER)
     ws.row_dimensions[4].height = 22
     tiles = [
         ("TOTAL VIDEOS", f"=Stats!C{AT}", "#,##0", f'="across "&{n}&" channels"'),
@@ -1128,10 +1178,307 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     ws.freeze_panes = "A8"
     protect(ws)
 
+    # =============================================================== CATCH-UP + DAILY PLAN (personal workbook only)
+    if not fan:
+        def span(d):
+            """Excel text expression: a number of days shown as '23 days', '14 months' or '2 yr 3 mo'."""
+            return (f'IF({d}<60,ROUND({d},0)&" days",IF({d}<730,INT({d}/30.4375)&" months",'
+                    f'INT({d}/365.25)&" yr "&INT(MOD({d},365.25)/30.4375)&" mo"))')
+
+        def ch_sum(fn):
+            """Sum a per-channel expression over the channels that are switched on in 'In Catch Up'."""
+            return "=" + "+".join(f'IF(Channels!$M${CH_HDR + i}="No",0,{fn(idr(i))})' for i in range(1, n + 1))
+
+        # ------------------------------------------------------------- Catch-Up
+        ws = W["Catch-Up"]
+        title_block(ws, "Catch-Up Planner")
+        put(ws, "B3", "Play with your watching pace to see how long it takes to catch up on your backlog - and what you need to watch each day.",
+            font=fnt(9, False, "6B7385", italic=True))
+        nav(ws, "B4", "Dashboard", "◄ Dashboard")
+        nav(ws, "C4", "Daily Plan", "Daily Plan ►")
+        for col, w in zip("ABCDEFGHI", [2, 36, 18, 20, 18, 22, 24, 18, 3]):
+            ws.column_dimensions[col].width = w
+
+        # helper values (hidden): J = label, K = value
+        helpers = {
+            2: ("backlog videos", ch_sum(lambda c: f'COUNTIFS({CI},{c},{ST},"Unwatched")+COUNTIFS({CI},{c},{ST},"Watch Later")')),
+            3: ("backlog hours", ch_sum(lambda c: f'(SUMIFS({LN},{CI},{c},{ST},"Unwatched")+SUMIFS({LN},{CI},{c},{ST},"Watch Later"))*24')),
+            4: ("uploaded videos (window)", ch_sum(lambda c: f'COUNTIFS({CI},{c},{V("Day")},">"&TODAY()-$C$8,{ST},"<>Skipped")')),
+            5: ("uploaded hours (window)", ch_sum(lambda c: f'SUMIFS({LN},{CI},{c},{V("Day")},">"&TODAY()-$C$8,{ST},"<>Skipped")*24')),
+            6: ("break-even hours/day", "=IFERROR(K5/$C$8,0)"),
+            7: ("your pace hours/day", '=IF($D$7="hours per week",$C$7/7,IF($D$7="hours per month",$C$7/30.4375,$C$7))'),
+            8: ("net hours/day", "=K7-K6"),
+            9: ("days to catch up", '=IF(K3<=0,0,IF(K8<=0,"",K3/K8))'),
+            10: ("days to goal", '=IF(ISNUMBER($C$9),IF($C$9>TODAY(),$C$9-TODAY(),""),"")'),
+            11: ("required hours/day", '=IF(K10="","",K3/K10+K6)'),
+            12: ("actual hours/day 30d", f'=SUMIFS({LN},{V("Watched On")},">="&TODAY()-30,{V("Watched On")},"<"&TODAY()+1,{ST},"Watched")*24/30'),
+            13: ("actual hours/day 90d", f'=SUMIFS({LN},{V("Watched On")},">="&TODAY()-90,{V("Watched On")},"<"&TODAY()+1,{ST},"Watched")*24/90'),
+        }
+        for r, (lab, fm) in helpers.items():
+            put(ws, f"J{r}", lab, font=fnt(8, color="6B7385"))
+            f(ws, f"K{r}", fm, font=fnt(8, color="6B7385"))
+
+        section(ws, 6, "1   Your settings", "B", "H")
+        put(ws, "B7", "Your watching pace", font=fnt(10, True))
+        put(ws, "C7", sel("Catch-Up", "C7", 1.5), font=fnt(12, True, NAVY), fl="FFF8E1", al=CENTER, border=BOX, fmt="0.0#", unlock=True)
+        put(ws, "D7", sel("Catch-Up", "D7", "hours per day"), font=fnt(10, True, NAVY), fl="FFF8E1", al=CENTER, border=BOX, unlock=True)
+        f(ws, "E7", f'="=  "&{hm("K7/24")}&" per day   =   "&{hm("K7*7/24")}&" per week   =   "&{hm("K7*30.4375/24")}&" per month"',
+          font=fnt(9, False, "6B7385", italic=True))
+        put(ws, "B8", "Compare against uploads from the last", font=fnt(10, True))
+        put(ws, "C8", sel("Catch-Up", "C8", 365), font=fnt(12, True, NAVY), fl="FFF8E1", al=CENTER, border=BOX, unlock=True)
+        put(ws, "D8", "days  (sets your break-even pace)", font=fnt(9, False, "6B7385", italic=True))
+        put(ws, "B9", "Goal: be caught up by  (optional)", font=fnt(10, True))
+        put(ws, "C9", sel("Catch-Up", "C9", None), font=fnt(12, True, NAVY), fl="FFF8E1", al=CENTER, border=BOX, fmt="d mmm yyyy", unlock=True)
+        put(ws, "D9", "leave blank if you have no deadline", font=fnt(9, False, "6B7385", italic=True))
+        f(ws, "B10", f'="Counting "&COUNTIF(Channels!$M${CH_HDR + 1}:$M${CH_HDR + n},"<>No")&" of {n} channels (switch channels on/off in the Channels sheet, column In Catch Up). '
+                     f'Skipped videos never count. Type your pace as a number of hours, e.g. 1.5 = 1 h 30 m."',
+          font=fnt(8, False, "6B7385", italic=True))
+        dv_list(ws, "D7", '"hours per day,hours per week,hours per month"')
+        dv_list(ws, "C8", '"30,90,180,365"')
+        dvn = DataValidation(type="decimal", operator="between", formula1="0", formula2="1000", allow_blank=False, showErrorMessage=True,
+                             errorTitle="Hours needed", error="Enter a number of hours, e.g. 1.5")
+        ws.add_data_validation(dvn); dvn.add("C7"); dvn.add("C28:C35")
+        dvd = DataValidation(type="date", operator="greaterThan", formula1="36526", allow_blank=True, showErrorMessage=True,
+                             errorTitle="Date needed", error="Enter a date in the future, e.g. 2027-06-30")
+        ws.add_data_validation(dvd); dvd.add("C9")
+
+        section(ws, 12, "2   Where you stand", "B", "H")
+        rows2 = [
+            ("Backlog (unwatched + watch later)", '=TEXT(K2,"#,##0")&" videos   ·   "&' + hm("K3/24")),
+            ("New uploads, last window", '=TEXT(K4,"#,##0")&" videos   ·   "&' + hm("K5/24") + '&"  in the last "&$C$8&" days"'),
+            ("Break-even pace", "=" + hm("K6/24") + '&" per day   ·   "&' + hm("K6*7/24") + '&" per week   ·   "&' + hm("K6*30.4375/24") + '&" per month"'),
+            ("Your pace", "=" + hm("K7/24") + '&" per day   ·   "&' + hm("K7*7/24") + '&" per week   ·   "&' + hm("K7*30.4375/24") + '&" per month"'),
+            ("Backlog change at your pace", '=IF(K8>=0,"+","-")&' + hm("ABS(K8)/24") + '&" per day   "&IF(K8>0.0001,"(backlog shrinking)",IF(K8<-0.0001,"(backlog GROWING)","(holding steady)"))'),
+            ("Time to catch up", '=IF(K3<=0,"You are already caught up!",IF(K9="","Not at this pace - you need more than "&' + hm("K6/24") + '&" per day","About "&' + span("K9") + '))'),
+            ("Caught up on", '=IF(K3<=0,TODAY(),IF(K9="","-",IF(K9>36500,"-",TODAY()+ROUND(K9,0))))'),
+            ("To meet your goal date, watch", '=IF(K11="","Set a goal date above (optional)",' + hm("K11/24") + '&" per day   ·   "&' + hm("K11*7/24") + '&" per week   ·   "&' + hm("K11*30.4375/24") + '&" per month")'),
+            ("Your actual pace so far", '="last 30 days: "&' + hm("K12/24") + '&" per day   ·   last 90 days: "&' + hm("K13/24") + '&" per day    (videos with a Watched On date)"'),
+        ]
+        for k, (lab, fm) in enumerate(rows2):
+            r = 13 + k
+            put(ws, f"B{r}", lab, font=fnt(10, True), border=BOX, fl="F3F5F9")
+            ws.merge_cells(f"C{r}:H{r}")
+            f(ws, f"C{r}", fm, font=fnt(11, False, NAVY), al=LEFT, border=BOX, fmt="d mmm yyyy")
+            for cc in "DEFGH":
+                ws[f"{cc}{r}"].border = BOX
+        ws.merge_cells("B22:H22"); ws.row_dimensions[22].height = 34
+        f(ws, "B22", '=IF(K3<=0,"You are caught up - just keep watching "&' + hm("K6/24") + '&" a day to stay that way.",'
+                     'IF(K8>0.0001,"At this pace you gain "&' + hm("K8/24") + '&" a day on the backlog and will be caught up in about "&' + span("K9") + '&".",'
+                     '"At this pace the backlog is not shrinking. You need more than "&' + hm("K6/24") + '&" a day just to break even - every extra "&' + hm("0.25/24") + '&" a day starts to chip away at it."))',
+          font=fnt(12, True, "FFFFFF"), fl=TEAL, al=Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1))
+        ws.conditional_formatting.add("B22:H22", FormulaRule(formula=["AND($K$3>0,$K$8<=0.0001)"], fill=fill("C0392B")))
+
+        section(ws, 24, "3   What if you watched more (or less)?   Type your own hours per day in the gold cells.", "B", "H")
+        head(ws, 25, 2, ["Scenario", "Hours per day", "Per week", "Per month", "Backlog change", "Time to catch up", "Caught up on"], height=26)
+        scen = [("Break even", "=K6", False), ("Your pace", "=K7", False)] + [("Try your own", v, True) for v in (0.5, 1, 1.5, 2, 2.5, 3, 4, 6)]
+        for k, (lab, val, is_input) in enumerate(scen):
+            r = 26 + k
+            put(ws, f"B{r}", lab, font=fnt(10, not is_input, "7A8294" if is_input else NAVY, italic=is_input), border=BOX)
+            if is_input:
+                saved = selectors.get(("Catch-Up", f"C{r}"))
+                put(ws, f"C{r}", saved if isinstance(saved, (int, float)) else val, fl="FFF8E1", al=CENTER, border=BOX, fmt='0.0#" h"', unlock=True)
+                f(ws, f"J{r}", f"=C{r}", font=fnt(8, color="6B7385"))
+            else:
+                f(ws, f"J{r}", val, font=fnt(8, color="6B7385"))
+                f(ws, f"C{r}", "=" + hm(f"J{r}/24"), al=CENTER, border=BOX, font=fnt(10, True))
+            f(ws, f"D{r}", "=" + hm(f"J{r}*7/24"), al=CENTER, border=BOX)
+            f(ws, f"E{r}", "=" + hm(f"J{r}*30.4375/24"), al=CENTER, border=BOX)
+            f(ws, f"F{r}", f'=IF(J{r}-$K$6>=0,"+","-")&' + hm(f"ABS(J{r}-$K$6)/24") + '&" / day"', al=CENTER, border=BOX)
+            f(ws, f"K{r}", f'=IF($K$3<=0,0,IF(J{r}-$K$6<=0.0001,"",$K$3/(J{r}-$K$6)))', font=fnt(8, color="6B7385"))
+            f(ws, f"G{r}", f'=IF($K$3<=0,"Already caught up",IF(K{r}="",IF(ABS(J{r}-$K$6)<=0.0001,"Holds steady (never shrinks)","Not at this pace"),"About "&' + span(f"K{r}") + '))',
+              al=CENTER, border=BOX)
+            f(ws, f"H{r}", f'=IF($K$3<=0,TODAY(),IF(K{r}="","-",IF(K{r}>36500,"-",TODAY()+ROUND(K{r},0))))', fmt="d mmm yyyy", al=CENTER, border=BOX)
+        ws.conditional_formatting.add("B26:H26", FormulaRule(formula=["TRUE"], fill=fill("E6E8EC")))
+        ws.conditional_formatting.add("B27:H27", FormulaRule(formula=["TRUE"], fill=fill("D5EEF1")))
+        ws.conditional_formatting.add("G26:G35", FormulaRule(formula=['LEFT(G26,3)="Not"'], font=Font(color="C0392B", bold=True)))
+        ws.conditional_formatting.add("G26:G35", FormulaRule(formula=['LEFT(G26,5)="About"'], font=Font(color="1E6B34", bold=True)))
+        put(ws, "B36", "Break even = the pace that exactly matches new uploads, so the backlog neither grows nor shrinks. Type hours as a number (1.5 = 1 h 30 m). Dates assume you keep that pace every day.",
+            font=fnt(8, False, "6B7385", italic=True))
+
+        section(ws, 38, "4   Your backlog over the next 5 years", "B", "H")
+        for col, lab in zip("MNOPQR", ["Month", "Date", "Your pace", "Your pace + 1 h/day", "Your pace + 2 h/day", "Break-even pace (stays flat)"]):
+            put(ws, f"{col}5", lab, font=fnt(8, True, "6B7385"))
+        for m in range(61):
+            r = 6 + m
+            put(ws, f"M{r}", m, font=fnt(8, color="6B7385"))
+            f(ws, f"N{r}", f"=EDATE(TODAY(),M{r})", fmt="mmm yyyy", font=fnt(8, color="6B7385"))
+            f(ws, f"O{r}", f"=MAX(0,$K$3-$K$8*M{r}*30.4375)", fmt="#,##0", font=fnt(8, color="6B7385"))
+            f(ws, f"P{r}", f"=MAX(0,$K$3-($K$8+1)*M{r}*30.4375)", fmt="#,##0", font=fnt(8, color="6B7385"))
+            f(ws, f"Q{r}", f"=MAX(0,$K$3-($K$8+2)*M{r}*30.4375)", fmt="#,##0", font=fnt(8, color="6B7385"))
+            f(ws, f"R{r}", "=$K$3", fmt="#,##0", font=fnt(8, color="6B7385"))
+        from openpyxl.chart import LineChart
+        from openpyxl.chart.marker import Marker
+        lc = LineChart()
+        lc.title = "Hours of video left to watch"; lc.width, lc.height = 27, 10
+        lc.add_data(Reference(ws, min_col=15, max_col=18, min_row=5, max_row=66), titles_from_data=True)
+        lc.set_categories(Reference(ws, min_col=14, min_row=6, max_row=66))
+        for s_, c_ in zip(lc.series, [TEAL, "2E9E6B", "3B6FB6", "8C96AA"]):
+            s_.graphicalProperties.line.solidFill = c_; s_.graphicalProperties.line.width = 28000
+            s_.smooth = False; s_.marker = Marker(symbol="none")
+        lc.series[3].graphicalProperties.line.dashStyle = "dash"
+        lc.x_axis.number_format = "mmm yyyy"; lc.x_axis.tickLblSkip = 6; lc.x_axis.tickMarkSkip = 6
+        lc.y_axis.number_format = "#,##0"; lc.y_axis.title = "hours"
+        lc.x_axis.delete = False; lc.y_axis.delete = False
+        lc.visible_cells_only = False      # the chart data sits in hidden columns
+        tidy(lc, left=0.07, width=0.90)
+        ws.add_chart(lc, "B40")
+        ws.column_dimensions.group("J", "R", hidden=True)
+        ws.freeze_panes = "A5"
+        protect(ws)
+
+        # ------------------------------------------------------------- Daily Plan
+        ws = W["Daily Plan"]
+        title_block(ws, "Daily Plan")
+        for col, w in zip("ABCDEFGHI", [2, 6, 14, 26, 82, 11, 14, 20, 3]):
+            ws.column_dimensions[col].width = w
+        nav(ws, "B4", "Dashboard", "◄ Dashboard")
+        selector(ws, "D4", sel("Daily Plan", "D4", "My pace"), "D3", "List target")
+        selector(ws, "E4", sel("Daily Plan", "E4", "Oldest first"), "E3", "Order")
+        dv_list(ws, "D4", '"Break even,My pace,Catch up by goal date"')
+        dv_list(ws, "E4", '"Oldest first,Newest first,Watch Later first, then oldest"')
+        put(ws, "M1", "helpers", font=fnt(8, color="6B7385"))
+        f(ws, "M2", f'=IF($D$4="Break even",\'Catch-Up\'!K6,IF($D$4="My pace",\'Catch-Up\'!K7,IF(ISNUMBER(\'Catch-Up\'!K11),\'Catch-Up\'!K11,\'Catch-Up\'!K7)))', font=fnt(8, color="6B7385"))
+        f(ws, "M3", f'=SUMIFS({LN},{V("Watched On")},">="&TODAY(),{V("Watched On")},"<"&TODAY()+1,{ST},"Watched")*24', font=fnt(8, color="6B7385"))
+        f(ws, "M4", "=MAX(0,M2-M3)", font=fnt(8, color="6B7385"))
+        f(ws, "M5", "=M4/24", font=fnt(8, color="6B7385"))
+        PL0, PL1 = 11, 50
+        f(ws, "B5", '="Target: "&' + hm("M2/24") + '&" per day  ("&$D$4&")      Already watched today: "&' + hm("M3/24") + '&"      Still to go: "&' + hm("M4/24"),
+          font=fnt(11, True, NAVY))
+        f(ws, "B6", f'=IF(M4<=0,"🎉 You have hit today\'s target - anything below is a bonus!",'
+                    f'"Watch the highlighted videos below: "&COUNTIF($K${PL0}:$K${PL1},"<"&$M$5)&" video"&IF(COUNTIF($K${PL0}:$K${PL1},"<"&$M$5)=1,"","s")&" ("&'
+                    + hm(f'IFERROR(INDEX($G${PL0}:$G${PL1},COUNTIF($K${PL0}:$K${PL1},"<"&$M$5)),0)') + '&") gets you there.")',
+          font=fnt(11, False, "333333"))
+        put(ws, "D8", "Progress today", font=fnt(10, True), al=Alignment(horizontal="right"))
+        f(ws, "E8", "=IF(M2>0,MIN(1,M3/M2),0)", fmt="0%", al=LEFT, border=BOX)
+        ws.conditional_formatting.add("E8", DataBarRule(start_type="num", start_value=0, end_type="num", end_value=1, color="2E9E6B"))
+        put(ws, "B9", "Settings (pace, goal date, which channels count) live on the Catch-Up sheet.  Videos you've marked Watched, Skipped or already finished are left out.",
+            font=fnt(8, False, "6B7385", italic=True))
+        head(ws, 10, 2, ["#", "Published", "Channel", "Title", "Length", "Running total", ""], height=22)
+        key = V("Catch Key")
+        for k in range(1, PL1 - PL0 + 2):
+            r = PL0 + k - 1
+            f(ws, f"J{r}", f'=IFERROR(MATCH(IF($E$4="Newest first",LARGE({key},{k}),SMALL({key},{k})),{key},0),"")', font=fnt(8, color="6B7385"))
+            f(ws, f"K{r}", f'=IF($J{r}="","",G{r}-INDEX({LN},$J{r}))', font=fnt(8, color="6B7385"), fmt="0.0000")
+            f(ws, f"B{r}", f'=IF($J{r}="","",{k})', al=CENTER, border=BOX, font=fnt(9, color="6B7385"))
+            f(ws, f"C{r}", f'=IF($J{r}="","",INDEX({V("Day")},$J{r}))', fmt="d mmm yyyy", al=CENTER, border=BOX)
+            f(ws, f"D{r}", f'=IF($J{r}="","",INDEX({V("Channel")},$J{r}))', border=BOX)
+            f(ws, f"E{r}", f'=IF($J{r}="","",IF(INDEX({V("Video ID")},$J{r})="",INDEX({V("Title")},$J{r}),HYPERLINK("https://www.youtube.com/watch?v="&INDEX({V("Video ID")},$J{r}),INDEX({V("Title")},$J{r}))))',
+              font=fnt(10, False, "1155CC"), border=BOX)
+            f(ws, f"F{r}", f'=IF($J{r}="","",INDEX({LN},$J{r}))', fmt="[h]:mm:ss", al=CENTER, border=BOX)
+            prev = "0" if k == 1 else f"N(G{r - 1})"
+            f(ws, f"G{r}", f'=IF($J{r}="","",{prev}+F{r})', fmt=HM_FMT, al=CENTER, border=BOX)
+            f(ws, f"H{r}", f'=IF($K{r}="","",IF($M$5<=0,"",IF(AND($K{r}<$M$5,G{r}>=$M$5),"◄ goal reached today",IF($K{r}>=$M$5,"bonus",""))))',
+              al=LEFT, border=BOX, font=fnt(9, True, "1E6B34"))
+        rng = f"B{PL0}:H{PL1}"
+        ws.conditional_formatting.add(rng, FormulaRule(formula=[f'AND($K{PL0}<>"",$M$5>0,$K{PL0}<$M$5,$G{PL0}>=$M$5)'], fill=fill("BFE8C9"), stopIfTrue=True))
+        ws.conditional_formatting.add(rng, FormulaRule(formula=[f'AND($K{PL0}<>"",$M$5>0,$K{PL0}<$M$5)'], fill=fill("E3F4E5"), stopIfTrue=True))
+        ws.conditional_formatting.add(rng, FormulaRule(formula=[f'$K{PL0}<>""'], font=Font(color="8A93A6")))
+        ws.column_dimensions.group("J", "M", hidden=True)
+        ws.freeze_panes = f"A{PL0}"
+        protect(ws)
+
+    # =============================================================== EVENTS (holidays, releases, Carlin milestones, your own)
+    def _dt(x):
+        if x is None or x == "":
+            return None
+        if isinstance(x, datetime):
+            return x
+        if isinstance(x, date):
+            return datetime(x.year, x.month, x.day)
+        return None
+
+    ev_rows = []
+    for e in (events or []):
+        ev_rows.append(dict(date=_dt(e["start"]), end=_dt(e.get("end")), title=e["title"], cat=e["cat"],
+                            repeat="Yes" if e["repeat"] else "No", notes=e.get("notes") or "",
+                            show=(events_show or {}).get(e["key"], "Yes"), source="Built-in", key=e["key"]))
+    for m in (events_mine if events_mine is not None else EVENT_TEMPLATES):
+        ev_rows.append(dict(date=_dt(m.get("date")), end=_dt(m.get("end")), title=m.get("title") or "", cat=m.get("cat") or "Other",
+                            repeat="Yes" if str(m.get("repeat") or "").strip().lower() in ("yes", "y", "true", "1") else "No",
+                            notes=m.get("notes") or "", show=m.get("show") or "Yes", source="Mine", key=""))
+    ev_rows.sort(key=lambda r: (r["date"] is None, r["date"] or datetime.max, r["title"]))
+    CAP = max(400, len(ev_rows) + 150)
+    EV_FIRST, EV_LAST = 6, 5 + CAP
+    ev_col = lambda c: f"Events!${c}${EV_FIRST}:${c}${EV_LAST}"
+    ev_start, ev_title, ev_cat, ev_notes = ev_col("A"), ev_col("C"), ev_col("D"), ev_col("F")
+    CAT_LIST = ",".join(c[0] for c in CATS)
+
+    ws = W["Events"]
+    ws.sheet_view.showGridLines = False
+    put(ws, "A1", "Events", font=fnt(18, True, NAVY)); ws.row_dimensions[1].height = 28
+    put(ws, "A2", "These appear on the Calendar sheet. To add your own, type in the first empty row under the table. Date = first day (End Date only for multi-day events). "
+                  "Repeats Yearly = Yes for birthdays and anniversaries; write {n} in the name to show the number of years (\"J's birthday (turns {n})\").",
+        font=fnt(9, False, "6B7385", italic=True))
+    put(ws, "A3", "Show = No hides an event. Rows with Source = Built-in are refreshed when the library updates (only their Show setting is remembered); rows you add are never touched. "
+                  "To change a built-in event, hide it and add your own version. Put a web address in Notes / Link to make the calendar entry clickable.",
+        font=fnt(9, False, "6B7385", italic=True))
+    nav(ws, "A4", "Dashboard", "◄ Dashboard")
+    f(ws, "C4", f'=COUNTA(C{EV_FIRST}:C{EV_LAST})&" of {CAP} rows used - the calendar reads rows {EV_FIRST} to {EV_LAST}."',
+      font=fnt(9, True, "6B7385"))
+    for i, nm in enumerate(["Date", "End Date", "Event", "Category", "Repeats Yearly", "Notes / Link", "Show", "Source", "Key"], 1):
+        put(ws, f"{CL(i)}5", nm, font=fnt(9, True, "FFFFFF"), fl=SLATE if nm not in ("Show",) else TEAL, al=CENTER, border=BOX)
+    ws.row_dimensions[5].height = 24
+    for i, r in enumerate(ev_rows):
+        rr = EV_FIRST + i
+        mine_fill = "FFF8E1" if r["source"] == "Mine" else None
+        put(ws, f"A{rr}", r["date"], fmt="yyyy-mm-dd", al=CENTER, fl=mine_fill)
+        put(ws, f"B{rr}", r["end"], fmt="yyyy-mm-dd", al=CENTER, fl=mine_fill)
+        text(ws, f"C{rr}", r["title"], fl=mine_fill)
+        put(ws, f"D{rr}", r["cat"], al=CENTER, fl=mine_fill)
+        put(ws, f"E{rr}", r["repeat"], al=CENTER, fl=mine_fill)
+        text(ws, f"F{rr}", r["notes"] or None, font=fnt(9, color="6B7385"), fl=mine_fill)
+        put(ws, f"G{rr}", r["show"], al=CENTER, fl="FFF8E1")
+        put(ws, f"H{rr}", r["source"], al=CENTER, font=fnt(9, color="6B7385"))
+        put(ws, f"I{rr}", r["key"] or None, font=fnt(8, color="9AA3B5"))
+    t = Table(displayName="tblEvents", ref=f"A5:I{5 + max(len(ev_rows), 1)}")
+    t.tableStyleInfo = TableStyleInfo(name="TableStyleLight1", showRowStripes=True)
+    ws.add_table(t)
+    for col, w in zip("ABCDEFGHI", [13, 13, 62, 17, 14, 50, 8, 11, 24]):
+        ws.column_dimensions[col].width = w
+    ws.column_dimensions.group("I", "I", hidden=True)
+    for ref, fm, kind in [(f"D{EV_FIRST}:D{EV_LAST}", f'"{CAT_LIST}"', "list"), (f"E{EV_FIRST}:E{EV_LAST}", '"Yes,No"', "list"),
+                          (f"G{EV_FIRST}:G{EV_LAST}", '"Yes,No"', "list")]:
+        dvx = DataValidation(type="list", formula1=fm, allow_blank=True)
+        ws.add_data_validation(dvx); dvx.add(ref)
+    dvx = DataValidation(type="date", operator="greaterThan", formula1="1", allow_blank=True, showErrorMessage=True,
+                         errorTitle="Date needed", error="Enter a date such as 2026-12-25")
+    ws.add_data_validation(dvx); dvx.add(f"A{EV_FIRST}:B{EV_LAST}")
+    ws.conditional_formatting.add(f"A{EV_FIRST}:H{EV_LAST}", FormulaRule(formula=[f'$G{EV_FIRST}="No"'], font=Font(color="9AA3B5", italic=True)))
+    for ci, (cn, em, cc) in enumerate(CATS):
+        ws.conditional_formatting.add(f"D{EV_FIRST}:D{EV_LAST}", FormulaRule(formula=[f'$D{EV_FIRST}="{cn}"'], fill=fill(tint(cc, 0.78))))
+    ws.freeze_panes = f"A{EV_FIRST}"
+
+    # ---- hidden calculation sheet: which events fall on which day of the displayed calendar grid
+    G = W["EventGrid"]
+    G.sheet_state = "hidden"
+    put(G, "A1", "grid start / end", font=fnt(8, color="6B7385"))
+    f(G, "B1", "=Calendar!$K$3", fmt="yyyy-mm-dd"); f(G, "B2", "=B1+41", fmt="yyyy-mm-dd")
+    put(G, "A2", "len", font=fnt(8, color="6B7385"))
+    for t_ in range(42):
+        f(G, f"{CL(8 + t_)}2", f"=Calendar!$K$3+{t_}", fmt="yyyy-mm-dd")
+        put(G, f"{CL(8 + t_)}3", 0)
+    for i in range(1, CAP + 1):
+        r, er = 3 + i, 5 + i
+        EA, EB, EC, ED, EE, EG = (f"Events!$A{er}", f"Events!$B{er}", f"Events!$C{er}", f"Events!$D{er}", f"Events!$E{er}", f"Events!$G{er}")
+        f(G, f"A{r}", f'=IF(AND(ISNUMBER({EA}),ISNUMBER({EB})),MAX(0,{EB}-{EA}),0)')
+        f(G, f"B{r}", f'=IF(ISNUMBER({EA}),DATE(YEAR($B$1)-1,MONTH({EA}),DAY({EA})),"")')
+        f(G, f"C{r}", f'=IF(ISNUMBER({EA}),DATE(YEAR($B$1),MONTH({EA}),DAY({EA})),"")')
+        f(G, f"D{r}", f'=IF(ISNUMBER({EA}),DATE(YEAR($B$2),MONTH({EA}),DAY({EA})),"")')
+        ok = lambda c: f'AND({c}{r}>={EA},{c}{r}<=$B$2,{c}{r}+$A{r}>=$B$1)'
+        f(G, f"E{r}",
+          f'=IF(OR(NOT(ISNUMBER({EA})),{EG}="No",Calendar!$H$4="None"),"",IF(OR(Calendar!$H$4="All events",{ED}=Calendar!$H$4),'
+          f'IF({EE}="Yes",IF({ok("B")},B{r},IF({ok("C")},C{r},IF({ok("D")},D{r},""))),'
+          f'IF(AND({EA}<=$B$2,{EA}+$A{r}>=$B$1),{EA},"")),""))')
+        f(G, f"F{r}", f'=IF(E{r}="","",E{r}+A{r})')
+        f(G, f"G{r}", f'=IF(E{r}="","",IF(AND(E{r}<=EOMONTH(Calendar!$K$2,0),F{r}>=Calendar!$K$2),E{r}+{i}/100000,""))')
+        for t_ in range(42):
+            c = CL(8 + t_)
+            f(G, f"{c}{r}", f'={c}{r - 1}+IF(AND($E{r}<>"",$E{r}<={c}$2,$F{r}>={c}$2),1,0)')
+
     # =============================================================== CALENDAR
     ws = W["Calendar"]
     title_block(ws, "Upload Calendar")
-    put(ws, "B5", "Pick a year, month and (optionally) a channel with the dropdowns. Click a title to open it on YouTube.  ✓ = watched, dimmed.", font=fnt(9, False, "6B7385", italic=True))
+    put(ws, "B5", "Pick a year, month and (optionally) a channel with the dropdowns. Click a title to open it on YouTube.  ✓ = watched, dimmed.  Events (holidays, releases, milestones, your own) show in italics at the top of each day.", font=fnt(9, False, "6B7385", italic=True))
     nav(ws, "B4", "Dashboard", "◄ Dashboard")
     ws["B4"].alignment = LEFT
     ws.column_dimensions["A"].width = 2
@@ -1142,6 +1489,8 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     selector(ws, "C4", sel("Calendar", "C4", latest.year), "C3", "Year")
     selector(ws, "E4", sel("Calendar", "E4", MONTHS[lm - 1]), "E3", "Month")
     selector(ws, "G4", sel("Calendar", "G4", "All channels"), "G3", "Channel")
+    selector(ws, "H4", sel("Calendar", "H4", "All events"), "H3", "Events")
+    dv_list(ws, "H4", '"All events,' + ",".join(c[0] for c in CATS) + ',None"')
     dv_list(ws, "C4", "=YearList"); dv_list(ws, "E4", "=MonthList"); dv_list(ws, "G4", "=ChannelList")
     f(ws, "K2", "=DATE($C$4,MATCH($E$4,MonthList,0),1)", fmt="yyyy-mm-dd")
     f(ws, "K3", "=K2-(WEEKDAY(K2,1)-1)", fmt="yyyy-mm-dd")
@@ -1161,19 +1510,34 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
     for ci, lab in enumerate(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]):
         put(ws, f"{CL(2 + ci)}9", lab, font=fnt(10, True, "FFFFFF"), fl=NAVY, al=CENTER)
     R0 = 10
-    slot_ranges, block_cf = [], []
+    EVN = 2                                   # event rows per day
+    BLK = 1 + EVN + MAX_SLOTS                 # rows per week: header + events + videos
+    slot_ranges, ev_ranges = [], []
+    gcap = f"{3 + CAP}"
     for w in range(6):
-        h = R0 + 6 * w
+        h = R0 + BLK * w
         for j in range(7):
             cal, g1, g2, g3 = CL(2 + j), CL(11 + j), CL(19 + j), CL(27 + j)
+            gc = CL(8 + 7 * w + j)            # this day's column on the EventGrid sheet
             f(ws, f"{g1}{h}", f"=$K$3+{7 * w + j}", fmt="yyyy-mm-dd")
             f(ws, f"{g2}{h}", f'=IF(MONTH({g1}{h})=MONTH($K$2),COUNTIFS({V("Day")},{g1}{h},{CI},$K$4),0)')
             f(ws, f"{g3}{h}", f'=IF({g2}{h}>0,SUMIFS({LN},{V("Day")},{g1}{h},{CI},$K$4),0)')
             f(ws, f"{cal}{h}",
               f'=IF(MONTH({g1}{h})=MONTH($K$2),DAY({g1}{h})&IF({g2}{h}>0,"   ·   "&{g2}{h}&IF({g2}{h}=1," video"," videos")&"   ·   "&{hm(g3 + str(h))}&IF({g2}{h}>{MAX_SLOTS},"   (+"&({g2}{h}-{MAX_SLOTS})&" more)",""),""),"")',
               font=fnt(10, True, NAVY), fl="E9ECF3", al=LEFT, border=BOX)
-            for s in range(1, MAX_SLOTS + 1):
+            for s in range(1, EVN + 1):       # ---- event rows
                 rs = h + s
+                f(ws, f"{g1}{rs}", f'=IF(MONTH({g1}{h})=MONTH($K$2),IFERROR(MATCH({s},EventGrid!{gc}$3:{gc}${gcap},0)-1,""),"")')
+                f(ws, f"{g2}{rs}", f'=IF({g1}{rs}="","",IFERROR(MATCH(INDEX({ev_cat},{g1}{rs}),Lists!$G$1:$G$7,0),""))')
+                label = f'SUBSTITUTE(INDEX({ev_title},{g1}{rs}),"{{n}}",YEAR(INDEX(EventGrid!$E$4:$E${gcap},{g1}{rs}))-YEAR(INDEX({ev_start},{g1}{rs})))'
+                more = "" if s < EVN else f'&IF(EventGrid!{gc}${gcap}>{EVN}," (+"&(EventGrid!{gc}${gcap}-{EVN})&" more)","")'
+                txt = f'IFERROR(INDEX(Lists!$H$1:$H$7,{g2}{rs}),"")&" "&{label}{more}'
+                f(ws, f"{cal}{rs}",
+                  f'=IF({g1}{rs}="","",IF(LEFT(INDEX({ev_notes},{g1}{rs}),4)="http",HYPERLINK(INDEX({ev_notes},{g1}{rs}),{txt}),{txt}))',
+                  font=fnt(9, False, "333333", italic=True), al=Alignment(horizontal="left", vertical="center", wrap_text=False), border=BOX)
+                ws.row_dimensions[rs].height = 14
+            for s in range(1, MAX_SLOTS + 1):  # ---- video rows
+                rs = h + EVN + s
                 f(ws, f"{g1}{rs}",
                   f'=IF({g2}{h}>={s},MATCH({g1}{h}*100+{s},{V("Cal Key")},0),"")')
                 f(ws, f"{g2}{rs}", f'=IF({g1}{rs}="","",IFERROR(MATCH(INDEX({CI},{g1}{rs}),tblChannels[Channel ID],0),""))')
@@ -1182,15 +1546,39 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
                   f'HYPERLINK("https://www.youtube.com/watch?v="&INDEX({V("Video ID")},{g1}{rs}),IF(INDEX({ST},{g1}{rs})="Watched","✓ ","▸ ")&INDEX({V("Title")},{g1}{rs}))))',
                   font=fnt(9), al=Alignment(horizontal="left", vertical="center", wrap_text=False), border=BOX)
             ws.row_dimensions[h].height = 18
-        slot_ranges.append(f"B{h + 1}:H{h + MAX_SLOTS}")
-        ws.conditional_formatting.add(f"B{h}:H{h + MAX_SLOTS}",
+        ev_ranges.append(f"B{h + 1}:H{h + EVN}")
+        slot_ranges.append(f"B{h + EVN + 1}:H{h + EVN + MAX_SLOTS}")
+        ws.conditional_formatting.add(f"B{h}:H{h + EVN + MAX_SLOTS}",
                                       FormulaRule(formula=[f"MONTH(K${h})<>MONTH($K$2)"], fill=fill("D5D9E2"), stopIfTrue=True))
         ws.conditional_formatting.add(f"B{h}:H{h}", FormulaRule(formula=[f"K{h}=TODAY()"], font=Font(bold=True, color="C0392B")))
     sq = " ".join(slot_ranges)
-    first_slot = f"B{R0 + 1}"
+    eq = " ".join(ev_ranges)
+    first_slot = f"B{R0 + EVN + 1}"
     for i in range(n):
-        ws.conditional_formatting.add(sq, FormulaRule(formula=[f"S{R0 + 1}={i + 1}"], fill=fill(tint(colors[i], 0.72))))
+        ws.conditional_formatting.add(sq, FormulaRule(formula=[f"S{R0 + EVN + 1}={i + 1}"], fill=fill(tint(colors[i], 0.72))))
     ws.conditional_formatting.add(sq, FormulaRule(formula=[f'LEFT({first_slot},1)="✓"'], font=Font(color="8A93A6")))
+    for ci, (cn, em, cc) in enumerate(CATS):
+        ws.conditional_formatting.add(eq, FormulaRule(formula=[f"S{R0 + 1}={ci + 1}"], fill=fill(tint(cc, 0.82))))
+
+    # ---- "Events this month" list under the calendar
+    ML = R0 + BLK * 6 + 1
+    section(ws, ML, "Events this month", "B", "H")
+    gk = f"EventGrid!$G$4:$G${gcap}"
+    f(ws, f"B{ML}", f'="Events this month  ("&COUNT({gk})&")"', font=fnt(11, True, "FFFFFF"), fl=NAVY, al=LEFT)
+    MLN = 14
+    for k in range(1, MLN + 1):
+        r = ML + k
+        f(ws, f"K{r}", f'=IFERROR(MATCH(SMALL({gk},{k}),{gk},0),"")')
+        occ = f"INDEX(EventGrid!$E$4:$E${gcap},$K{r})"
+        f(ws, f"B{r}", f'=IF($K{r}="","",TEXT({occ},"ddd mmm d")&IF(INDEX(EventGrid!$A$4:$A${gcap},$K{r})>0," - "&TEXT(INDEX(EventGrid!$F$4:$F${gcap},$K{r}),"ddd mmm d"),""))',
+          font=fnt(9, True, "6B7385"), border=BOX)
+        ws.merge_cells(f"C{r}:E{r}"); ws.merge_cells(f"F{r}:H{r}")
+        f(ws, f"C{r}", f'=IF($K{r}="","",IFERROR(INDEX(Lists!$H$1:$H$7,MATCH(INDEX({ev_cat},$K{r}),Lists!$G$1:$G$7,0)),"")&" "&SUBSTITUTE(INDEX({ev_title},$K{r}),"{{n}}",YEAR({occ})-YEAR(INDEX({ev_start},$K{r}))))',
+          font=fnt(10, True), border=BOX)
+        f(ws, f"F{r}", f'=IF($K{r}="","",IF(INDEX({ev_notes},$K{r})=0,"",INDEX({ev_notes},$K{r})))', font=fnt(9, False, "6B7385", italic=True), border=BOX)
+        for cc in "DEGH":
+            ws[f"{cc}{r}"].border = BOX
+    f(ws, f"B{ML + MLN + 1}", f'=IF(COUNT({gk})>{MLN},"+ "&(COUNT({gk})-{MLN})&" more this month - see the Events sheet","")', font=fnt(9, False, "6B7385", italic=True))
     ws.column_dimensions.group("J", "AG", hidden=True)
     ws.sheet_view.zoomScale = 90
     protect(ws)
@@ -1224,7 +1612,7 @@ def build(path, videos, channels, tzname, selectors, now, fan=False):
         ws.freeze_panes = f"A{HDR + 1}"
 
     from openpyxl.worksheet.properties import PageSetupProperties
-    for nm in ("Dashboard", "Queue", "Calendar", "History", "Stats", "Channels", "Settings", "Library"):
+    for nm in ("Dashboard", "Queue", "Calendar", "Events", "History", "Stats", "Channels", "Settings", "Library") + (() if fan else ("Catch-Up", "Daily Plan")):
         w_ = W[nm]
         w_.page_setup.orientation = "landscape"
         w_.page_setup.fitToWidth = 1
@@ -1242,16 +1630,30 @@ def main():
     ap.add_argument("--import-legacy", metavar="XLSX", help="import the old scb_timeline.xlsx export")
     ap.add_argument("--workbook", default=str(WORKBOOK))
     ap.add_argument("--no-backup", action="store_true")
+    ap.add_argument("--export-events", action="store_true", help="write the Mine rows of the Events sheet to my_events.csv (for the website) and exit")
     a = ap.parse_args()
     path = Path(a.workbook)
     now = datetime.now().replace(microsecond=0)
 
-    existing = dict(settings={}, channels=[], videos=[], selectors={})
+    existing = dict(settings={}, channels=[], videos=[], selectors={}, events_mine=[], events_show={}, has_events=False)
     if path.exists():
         try:
             existing = read_workbook(path)
         except PermissionError:
             sys.exit("Can't read the workbook - close it in Excel and try again.")
+        if a.export_events:
+            rows = [m for m in existing["events_mine"] if m.get("date") and str(m.get("show") or "Yes") != "No" and m.get("title")]
+            import csv as _csv
+            out_csv = HERE / "my_events.csv"
+            with open(out_csv, "w", newline="", encoding="utf-8-sig") as fh:
+                wr = _csv.writer(fh)
+                wr.writerow(["date", "end", "title", "category", "repeat", "notes"])
+                for m in rows:
+                    dd = lambda x: x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else ""
+                    wr.writerow([dd(m["date"]), dd(m.get("end")), m["title"], m.get("cat") or "Other",
+                                 "yes" if str(m.get("repeat") or "").lower() in ("yes", "y", "true", "1") else "no", m.get("notes") or ""])
+            print(f"Wrote {len(rows)} of your events to {out_csv.name}. Commit it next to the website files to publish them.")
+            return
         if not a.no_backup:
             BACKUPS.mkdir(exist_ok=True)
             shutil.copy2(path, BACKUPS / f"SCB_Library_{now:%Y%m%d_%H%M%S}.xlsx")
@@ -1307,7 +1709,13 @@ def main():
         c.setdefault("name", c.get("yt"))
     videos = finalize(videos, channels, tz)
     tmp = path.with_suffix(".tmp.xlsx")
-    build(tmp, videos, channels, tzname, existing["selectors"], now)
+    events = None
+    if EV is not None and videos:
+        y0 = min(v["local"].year for v in videos)
+        y1 = max(max(v["local"].year for v in videos), now.year) + 1
+        events = EV.all_events(y0, y1, videos, channels)
+    mine = existing["events_mine"] if existing.get("has_events") else None      # None = first time: seed the template rows
+    build(tmp, videos, channels, tzname, existing["selectors"], now, events=events, events_mine=mine, events_show=existing["events_show"])
     try:
         os.replace(tmp, path)
     except PermissionError:

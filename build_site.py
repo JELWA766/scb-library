@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 """
 Build the public fan website from a library workbook.
 
@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import scb_library as S
+import events_data as EV
 
 HERE = Path(__file__).resolve().parent
 XLSX_NAME = "SCB_Library_Fan_Edition.xlsx"
@@ -78,10 +79,25 @@ def main():
         channels=[dict(n=c["name"], id=c["id"], c="#" + S.PALETTE[i % len(S.PALETTE)]) for i, c in enumerate(channels)],
         videos=rows)
 
+    # ---- calendar events: built-in + auto milestones + the owner's optional my_events.csv
+    y0 = min(v["local"].year for v in vids)
+    y1 = max(max(v["local"].year for v in vids), now.year) + 1
+    extra = EV.load_csv(HERE / "my_events.csv")
+    built = EV.all_events(y0, y1, vids, channels, extra=extra)
+    ev_out = []
+    for e in built:
+        cat = EV.CAT_NAMES.index(e["cat"]) if e["cat"] in EV.CAT_NAMES else len(EV.CAT_NAMES) - 1
+        for st, en, n in EV.occurrences(e, y1, y0 - 1):
+            title = e["title"].replace("{n}", str(n if n is not None else 0))
+            ev_out.append([st.isoformat(), en.isoformat() if en != st else "", title, cat, e.get("notes") or "", e.get("kw") or 0])
+    ev_out.sort(key=lambda r: r[0])
+    payload["events"] = ev_out
+    payload["cats"] = [[c[0], c[1], "#" + c[2]] for c in EV.CATEGORIES]
+
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     xlsx = out / XLSX_NAME
-    S.build(xlsx, vids, channels, tzname, {}, now, fan=True)
+    S.build(xlsx, vids, channels, tzname, {}, now, fan=True, events=built)
     size_mb = xlsx.stat().st_size / 1e6
     payload["xlsx_mb"] = round(size_mb, 1)
 

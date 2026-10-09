@@ -81,9 +81,11 @@ tr.tot td{font-weight:700;background:rgba(var(--acc-rgb),.08)}
 .day .meta{font-size:11px;color:var(--mut);margin-left:4px}
 .vid{display:block;font-size:11.5px;line-height:1.25;margin-top:3px;padding:2px 4px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--ink);text-decoration:none;border-radius:3px}
 .more{font-size:11px;color:var(--acc);margin-top:3px}
+.ev{display:block;font-size:11px;line-height:1.25;margin-top:3px;padding:1px 4px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);font-style:italic;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border-radius:3px}
+.dots i.sq{border-radius:2px}
 .dots{display:none;gap:3px;flex-wrap:wrap;margin-top:4px}
 .dots i{width:8px;height:8px;border-radius:50%;background:var(--c)}
-@media(max-width:720px){.hide-m{display:none}.day{min-height:56px;padding:3px}.vid,.more,.day .meta{display:none}.dots{display:flex}.cal{gap:2px}}
+@media(max-width:720px){.hide-m{display:none}.day{min-height:56px;padding:3px}.vid,.more,.ev,.day .meta{display:none}.dots{display:flex}.cal{gap:2px}}
 .pill{display:inline-block;padding:2px 10px;border-radius:99px;background:rgba(var(--acc-rgb),.12);margin-right:6px;font-size:13px}
 .note{background:rgba(var(--acc-rgb),.08);border:1px solid rgba(var(--acc-rgb),.3);border-radius:10px;padding:10px 14px}
 ol.steps li{margin:6px 0}
@@ -189,6 +191,8 @@ views.overview=()=>{
  const now=new Date(), tm=now.getMonth()+1, td=now.getDate();
  const otd=V.filter(v=>v.m===tm&&v.dd===td&&v.y<now.getFullYear()).sort((a,b)=>b.y-a.y).slice(0,8);
  const newest=V.slice(-10).reverse();
+ const todayN=Math.floor(Date.now()/864e5);
+ const upcoming=EVS.filter(e=>e.ed>=todayN&&e.sd<=todayN+60&&e.c!==4).sort((a,b)=>a.sd-b.sd).slice(0,8);
  app.innerHTML=`
  <div class="grid kpis" style="margin-bottom:16px">
   <div class="kpi"><b>${fmtN(V.length)}</b><span>Videos</span></div>
@@ -208,6 +212,7 @@ views.overview=()=>{
   <div class="card"><h3>On this day in SCB history <span class="sub">(${MN[tm-1]} ${td})</span></h3>
    ${otd.length?`<div class="list">${otd.map(v=>`<div class="item"><span class="d">${dl(v)}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${now.getFullYear()-v.y}y ago &middot; ${dur(v.s)}</span></div>`).join('')}</div>`:'<div class="empty">Nothing was uploaded on this date in past years.</div>'}</div>
  </div>
+ ${upcoming.length?`<div class="card"><h3>Coming up <span class="sub">(next 60 days)</span></h3><div class="list">${upcoming.map(e=>`<div class="item"><span class="d"><a class="dl" href="#calendar/${e.s}" title="Open in the calendar">${evRange(e)}</a></span><span class="t"><span class="chip" style="--c:${evCol(e)}">${evIcon(e)} ${esc((CAT[e.c]||[''])[0])}</span>${esc(e.t)}</span><span class="r"></span></div>`).join('')}</div></div>`:''}
  <div class="card"><h3>🎲 Random video</h3>
   <div class="controls">${chSel('rch',-1,'Any channel')}<button class="btn pri" id="rbtn">Surprise me</button></div>
   <div id="randOut" class="sub">Pick a channel (or leave it on "Any channel") and press the button.</div></div>`;
@@ -284,43 +289,65 @@ views.library=()=>{
 };
 
 /* Calendar */
-const cal={ch:-1,sel:null};
+const NOWD=new Date(),MKX=Math.max(MK1,NOWD.getFullYear()*12+NOWD.getMonth()+12);   /* browse up to a year ahead for upcoming releases */
+const cal={ch:-1,sel:null,ev:-1};            /* ev: -1 = all categories, -2 = none, otherwise a category index */
+const CAT=D.cats||[];
+const EVS=(D.events||[]).map(a=>({s:a[0],e:a[1]||a[0],t:a[2],c:a[3],n:a[4]||'',kw:a[5]||[]}));
+const EVD=new Map();                           /* day number -> events covering that day */
+for(const e of EVS){const p=e.s.split('-'),q=e.e.split('-');e.sd=Date.UTC(+p[0],+p[1]-1,+p[2])/864e5;e.ed=Date.UTC(+q[0],+q[1]-1,+q[2])/864e5;
+ for(let k=e.sd;k<=e.ed&&k-e.sd<400;k++)(EVD.get(k)||EVD.set(k,[]).get(k)).push(e)}
+const evOk=e=>cal.ev===-1||cal.ev===e.c;
+const evIcon=e=>(CAT[e.c]||['','📌'])[1];
+const evCol=e=>(CAT[e.c]||['','','#5C6B7A'])[2];
+const evNote=e=>/^https?:\/\//.test(e.n)?`<a href="${esc(e.n)}" target="_blank" rel="noopener">link ↗</a>`:esc(e.n);
+const related=e=>e.kw.length?V.filter(v=>v.day>=e.sd&&v.day<=e.sd+10&&e.kw.some(k=>v.tl.includes(k))).slice(0,4):[];
+const evRange=e=>{const f=ds=>{const p=ds.split('-');return `${MS[+p[1]-1]} ${+p[2]}`};return e.e!==e.s?`${f(e.s)} - ${f(e.e)}`:f(e.s)};
+const evRow=(e,rel)=>`<div class="item"><span class="d">${evRange(e)}</span><span class="t"><span class="chip" style="--c:${evCol(e)}">${evIcon(e)} ${esc((CAT[e.c]||[''])[0])}</span>${esc(e.t)}${e.n?` <span class="sub">${evNote(e)}</span>`:''}</span><span class="r"></span>${rel&&related(e).length?`<div class="snip">SCB videos soon after: ${related(e).map(v=>link(v)).join(' · ')}</div>`:''}</div>`;
 views.calendar=(arg)=>{
  let y,m,dd=null; const mm=/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/.exec(arg||'');
  if(mm){y=+mm[1];m=+mm[2]-1;if(mm[3])dd=+mm[3]}else{y=Math.floor(MK1/12);m=MK1%12}
- const mk=Math.min(Math.max(mkOf(y,m),MK0),MK1);y=Math.floor(mk/12);m=mk%12;
+ const mk=Math.min(Math.max(mkOf(y,m),MK0),MKX);y=Math.floor(mk/12);m=mk%12;
  arg=`${y}-${p2(m+1)}`;
  if(dd){cal.sel=dd;cal.ch=-1;history.replaceState(null,'','#calendar/'+arg)}   /* arrived from a date link */
  const go=k=>{cal.sel=null;location.hash=`#calendar/${Math.floor(k/12)}-${p2(k%12+1)}`};
  const list=(byMonth.get(mk)||[]).filter(v=>cal.ch<0||v.c===cal.ch);
  const first=new Date(Date.UTC(y,m,1)),off=first.getUTCDay(),dim=new Date(Date.UTC(y,m+1,0)).getUTCDate();
  const days={};for(const v of list)(days[v.dd]||(days[v.dd]=[])).push(v);
+ const dayEv=d=>cal.ev===-2?[]:(EVD.get(Date.UTC(y,m,d)/864e5)||[]).filter(evOk);
  const weeks=Math.ceil((off+dim)/7);
  let cells=WD.map(w=>`<div class="wd">${w}</div>`).join('');
  for(let i=0;i<weeks*7;i++){const d=i-off+1;
   if(d<1||d>dim){cells+='<div class="day out"></div>';continue}
-  const a=days[d]||[],extra=a.length-4;
+  const a=days[d]||[],extra=a.length-3,ev=dayEv(d);
   cells+=`<div class="day${cal.sel===d?' sel':''}" data-d="${d}"><span class="n">${d}</span>${a.length?`<span class="meta">${a.length} · ${fmtH(sum(a,v=>v.s))}</span>`:''}
-   ${a.slice(0,4).map(v=>`<a class="vid" style="--c:${CH[v.c].c}" href="${url(v)}" target="_blank" rel="noopener" title="${esc(v.t)}">${esc(v.t)}</a>`).join('')}
-   ${extra>0?`<div class="more">+${extra} more</div>`:''}<div class="dots">${a.map(v=>`<i style="--c:${CH[v.c].c}"></i>`).join('')}</div></div>`}
- const yrs=[];for(let k=Y0;k<=Y1;k++)yrs.push(k);
+   ${ev.slice(0,2).map(e=>`<div class="ev" style="--c:${evCol(e)}" title="${esc(e.t)}">${evIcon(e)} ${esc(e.t)}</div>`).join('')}${ev.length>2?`<div class="more">+${ev.length-2} more events</div>`:''}
+   ${a.slice(0,3).map(v=>`<a class="vid" style="--c:${CH[v.c].c}" href="${url(v)}" target="_blank" rel="noopener" title="${esc(v.t)}">${esc(v.t)}</a>`).join('')}
+   ${extra>0?`<div class="more">+${extra} more</div>`:''}<div class="dots">${ev.map(e=>`<i class="sq" style="--c:${evCol(e)}"></i>`).join('')}${a.map(v=>`<i style="--c:${CH[v.c].c}"></i>`).join('')}</div></div>`}
+ const yrs=[];for(let k=Y0;k<=Math.floor(MKX/12);k++)yrs.push(k);
  const counts=CH.map((c,i)=>list.filter(v=>v.c===i).length);
+ const mStart=Date.UTC(y,m,1)/864e5,mEnd=Date.UTC(y,m+1,0)/864e5;
+ const monthEv=cal.ev===-2?[]:EVS.filter(e=>e.sd<=mEnd&&e.ed>=mStart&&evOk(e)).sort((a,b)=>a.sd-b.sd);
  app.innerHTML=`<div class="card">
   <div class="controls"><button class="btn" id="pv" ${mk<=MK0?'disabled':''}>◀</button>
    <select id="cm">${MN.map((n,i)=>`<option value="${i}"${i===m?' selected':''}>${n}</option>`).join('')}</select>
    <select id="cy">${yrs.map(k=>`<option${k===y?' selected':''}>${k}</option>`).join('')}</select>
-   <button class="btn" id="nx" ${mk>=MK1?'disabled':''}>▶</button>${chSel('cc',cal.ch)}
+   <button class="btn" id="nx" ${mk>=MKX?'disabled':''}>▶</button>${chSel('cc',cal.ch)}
+   <select id="ce" title="Which events to show"><option value="-1"${cal.ev===-1?' selected':''}>All events</option>${CAT.map((c,i)=>`<option value="${i}"${cal.ev===i?' selected':''}>${c[1]} ${esc(c[0])}</option>`).join('')}<option value="-2"${cal.ev===-2?' selected':''}>No events</option></select>
    <button class="btn sm" id="lt">Latest</button><span class="sub hide-m">tip: ← → keys change month</span></div>
-  <h2>${MN[m]} ${y} <span class="sub">${list.length} video${list.length===1?'':'s'} · ${fmtH(sum(list,v=>v.s))}</span></h2>
+  <h2>${MN[m]} ${y} <span class="sub">${list.length} video${list.length===1?'':'s'} · ${fmtH(sum(list,v=>v.s))}${monthEv.length?` · ${monthEv.length} event${monthEv.length===1?'':'s'}`:''}</span></h2>
   <div class="legend" style="margin:0 0 10px">${CH.map((c,i)=>counts[i]?`<span class="chip" style="--c:${c.c}">${esc(c.n)} ${counts[i]}</span>`:'').join('')||'<span class="sub">No uploads this month.</span>'}</div>
   <div id="dayd"></div>
-  <div class="cal">${cells}</div></div>`;
- const detail=()=>{const a=days[cal.sel]||[];$('#dayd').innerHTML=cal.sel?`<div class="note" style="margin-bottom:12px"><b>${WD[(off+cal.sel-1)%7]}, ${MN[m]} ${cal.sel}, ${y}</b>${a.length?`<div class="list">${a.map(v=>`<div class="item"><span class="d">${v.tm}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span></div>`).join('')}</div>`:'<div class="sub">No uploads on this day.</div>'}</div>`:''};
+  <div class="cal">${cells}</div></div>
+  ${monthEv.length?`<div class="card"><h3>Events this month</h3><div class="list">${monthEv.map(e=>evRow(e,true)).join('')}</div></div>`:''}`;
+ const detail=()=>{const a=days[cal.sel]||[],ev=cal.sel?dayEv(cal.sel):[];$('#dayd').innerHTML=cal.sel?`<div class="note" style="margin-bottom:12px"><b>${WD[(off+cal.sel-1)%7]}, ${MN[m]} ${cal.sel}, ${y}</b>
+   ${ev.length?`<div class="list">${ev.map(e=>evRow(e,true)).join('')}</div>`:''}
+   ${a.length?`<div class="list">${a.map(v=>`<div class="item"><span class="d">${v.tm}</span><span class="t">${chip(v.c)}${link(v)}</span><span class="r">${dur(v.s)} · ${fmtN(v.v)} views</span></div>`).join('')}</div>`:(ev.length?'':'<div class="sub">No uploads or events on this day.</div>')}</div>`:''};
  detail();
  app.querySelectorAll('.day:not(.out)').forEach(el=>el.onclick=e=>{if(e.target.closest('a'))return;const d=+el.dataset.d;cal.sel=cal.sel===d?null:d;app.querySelectorAll('.day').forEach(x=>x.classList.toggle('sel',+x.dataset.d===cal.sel));detail()});
  $('#pv').onclick=()=>go(mk-1);$('#nx').onclick=()=>go(mk+1);$('#lt').onclick=()=>go(MK1);
  $('#cm').onchange=e=>go(mkOf(y,+e.target.value));$('#cy').onchange=e=>go(mkOf(+e.target.value,m));
  $('#cc').onchange=e=>{cal.ch=+e.target.value;cal.sel=null;views.calendar(arg)};
+ $('#ce').onchange=e=>{cal.ev=+e.target.value;views.calendar(arg)};
 };
 
 /* History */
@@ -442,6 +469,7 @@ views.tracker=()=>{
    <li><b>Dashboard</b> - % watched, time watched and remaining, per-channel progress, "up next".</li>
    <li><b>Queue</b> - your next 30 videos to watch, by channel, oldest or newest first.</li>
    <li><b>Calendar, History, Stats</b> - the same exploration tools as this site, plus your watching pace.</li>
+   <li><b>Events</b> - every holiday, release and milestone shown on the calendar. Add your own at the bottom: multi-day events and yearly repeats (birthdays, anniversaries) are supported.</li>
    <li><b>Watched Through</b> - on the Channels sheet, set a date and everything on or before it counts as watched. Great for catching up.</li></ul></div>
   <div class="card"><h3>How to use it</h3><ol class="steps">
    <li>Download the file and open it in Excel 2019 or Microsoft 365 (desktop). Click <b>Enable Editing</b>.</li>
@@ -458,7 +486,8 @@ views.tracker=()=>{
    <li>In the <b>new</b> workbook, open the <b>Carry Over</b> sheet, click cell <b>A1</b>, then <b>Paste Special &rarr; Values</b>. The title at the top should now say how many videos matched.</li>
    <li>On Carry Over, select columns <b>Z:AA</b> (Mark and Watched On) from row 6 down and copy. Go to <b>Library</b>, click cell <b>C6</b>, and <b>Paste Special &rarr; Values</b>. (Clear any filters on Library first.)</li>
    <li>Do the same for column <b>AB</b> (Notes), pasting into Library cell <b>L6</b>.</li>
-   <li>On the <b>Channels</b> sheet, re-enter your <b>Watched Through</b> dates (they're only a few cells). Then you can delete the Carry Over sheet.</li></ol>
+   <li>On the <b>Channels</b> sheet, re-enter your <b>Watched Through</b> dates (they're only a few cells). Then you can delete the Carry Over sheet.</li>
+   <li>Added events of your own? In the old workbook's <b>Events</b> sheet, filter <b>Source</b> to <i>Mine</i>, copy those rows, and paste them into the first empty rows at the bottom of the new Events sheet.</li></ol>
   <p class="sub">Tips: this works when both files came from this site (same column layout). Keep the old file as a backup until you've spot-checked a few videos. Videos that YouTube has since removed won't appear in the new file, so any marks on them simply drop away.</p></div>`;
 };
 

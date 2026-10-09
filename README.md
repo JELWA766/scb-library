@@ -26,6 +26,16 @@ Calendar (Sunday-first, prev/next), History, Stats, and an Excel-tracker page wi
 Zero-length (0:00) placeholder videos are left out. Descriptions are shortened and de-duplicated (URLs and sponsor
 boilerplate removed) so they can be searched without bloating the page.
 
+## Calendar events
+The calendar shows holidays, fandom days (Star Wars Day, Pokémon Day, Harry's birthday...), Disney / Pixar / Marvel / Star Wars /
+Harry Potter releases and trailers, game releases, industry events (Comic-Con, D23, strikes), and Carlin milestones taken from the
+channels' own uploads. All of that lives in `events_data.py` (edit the lists there, or fix any date you spot is off).
+**Add your own** by editing `my_events.csv` right on GitHub (columns: `date,end,title,category,repeat,notes`; dates as YYYY-MM-DD;
+`end` only for multi-day events; `repeat` = yes for birthdays/anniversaries; put `{n}` in the title for "turns {n}"). Categories:
+Holiday, Fandom, Movie / trailer, Game release, Carlin life, SCB milestone, Other. Your personal workbook's Events rows can be
+exported with `python scb_library.py --export-events` and committed here.
+`events_data.py` must stay in the same folder as `scb_library.py` and `build_site.py`.
+
 ## Files
 - `site_template.html` - the page (edit this to change the look); `build_site.py` - injects data, builds the Excel download
 - `scb_library.py` - the same engine as your desktop updater
